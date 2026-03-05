@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="ko">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <meta name="description" content="AR 마커 기반 나무 높이·폭 측정">
+    <title>측정 중 — TreeMeasure</title>
+    <link rel="stylesheet" href="css/style.css">
+</head>
+
+<body>
+
+    <!-- Permission / Loading Overlay -->
+    <div class="overlay-screen" id="permissionScreen">
+        <div class="spinner"></div>
+        <div class="overlay-icon">📷</div>
+        <h2 class="overlay-title">카메라 접근 허용</h2>
+        <p class="overlay-text">
+            나무를 측정하려면 카메라 권한이 필요합니다.<br>
+            브라우저 팝업에서 <strong>"허용"</strong>을 눌러주세요.
+        </p>
+        <button class="btn-primary" id="retryPermissionBtn" style="display:none;">
+            <span class="icon">🔄</span>
+            다시 시도
+        </button>
+    </div>
+
+    <!-- AR Container -->
+    <div class="ar-container" id="arContainer" style="display:none;">
+        <!-- Video element for camera feed -->
+        <video id="cameraVideo" autoplay playsinline muted style="width:100%;height:100%;object-fit:cover;"></video>
+        <!-- Canvas for drawing overlays -->
+        <canvas id="overlayCanvas"
+            style="position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;"></canvas>
+
+        <!-- Touch points will be dynamically added here -->
+        <div id="touchPointsContainer"></div>
+
+        <!-- Status bar -->
+        <div class="ar-status-bar">
+            <div class="status-badge status-scanning" id="statusBadge">
+                <div class="status-dot"></div>
+                <span id="statusText">마커 검색 중...</span>
+            </div>
+            <a href="index.html" class="btn-round" title="홈으로">✕</a>
+        </div>
+
+        <!-- Crosshair -->
+        <div class="crosshair" id="crosshair">
+            <div class="crosshair-circle"></div>
+        </div>
+
+        <!-- Measurement display -->
+        <div class="measurement-display" id="measurementDisplay">
+            <div class="measurement-card">
+                <div class="measurement-value" id="heightValue">—</div>
+                <div class="measurement-label">높이 (m)</div>
+            </div>
+        </div>
+
+        <!-- Bottom controls -->
+        <div class="ar-controls">
+            <div class="ar-guide-text" id="guideText">마커를 카메라에 비추세요</div>
+            <div class="ar-button-row">
+                <button class="btn-round" id="torchBtn" title="플래시">🔦</button>
+                <button class="btn-capture" id="captureBtn" title="포인트 찍기" disabled></button>
+                <button class="btn-round" id="resetBtn" title="초기화">↺</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast notification -->
+    <div class="toast" id="toast"></div>
+
+    <script src="js/camera.js"></script>
+    <script src="js/detector.js"></script>
+    <script src="js/measure.js"></script>
+    <script src="js/storage.js"></script>
+    <script src="js/app.js"></script>
+</body>
+
+</html>

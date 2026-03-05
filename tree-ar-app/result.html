@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="ko">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <meta name="description" content="나무 측정 결과">
+    <title>측정 결과 — TreeMeasure</title>
+    <link rel="stylesheet" href="css/style.css">
+</head>
+
+<body>
+
+    <div class="result-page">
+        <div class="result-header">
+            <a href="measure.html" class="btn-back">← 새 측정</a>
+            <h1 class="result-title">📊 측정 결과</h1>
+            <a href="index.html" class="btn-back">홈 🏠</a>
+        </div>
+
+        <!-- Captured image -->
+        <div class="result-image-container" id="resultImageContainer">
+            <canvas id="resultCanvas"></canvas>
+        </div>
+
+        <!-- Measurement data -->
+        <div class="result-data">
+            <div class="data-card">
+                <div class="data-value" id="resultHeight">—</div>
+                <div class="data-label">높이 (m)</div>
+            </div>
+            <div class="data-card">
+                <div class="data-value" id="resultWidth">—</div>
+                <div class="data-label">폭 (m)</div>
+            </div>
+            <div class="data-card full-width">
+                <div class="data-value" id="resultDistance">—</div>
+                <div class="data-label">측정 거리 (m)</div>
+            </div>
+        </div>
+
+        <!-- Actions -->
+        <div class="result-actions">
+            <button class="btn-secondary" id="saveBtn">
+                💾 저장
+            </button>
+            <button class="btn-success" id="shareBtn">
+                📤 공유
+            </button>
+        </div>
+    </div>
+
+    <div class="toast" id="toast"></div>
+
+    <script src="js/storage.js"></script>
+    <script>
+        // Load measurement data from sessionStorage
+        document.addEventListener('DOMContentLoaded', () => {
+            const data = JSON.parse(sessionStorage.getItem('measurementResult') || '{}');
+
+            if (data.height) {
+                document.getElementById('resultHeight').textContent = data.height.toFixed(2);
+            }
+            if (data.width) {
+                document.getElementById('resultWidth').textContent = data.width.toFixed(2);
+            }
+            if (data.distance) {
+                document.getElementById('resultDistance').textContent = data.distance.toFixed(2);
+            }
+
+            // Restore captured image
+            if (data.imageData) {
+                const canvas = document.getElementById('resultCanvas');
+                const ctx = canvas.getContext('2d');
+                const img = new Image();
+                img.onload = () => {
+                    canvas.width = img.width;
+                    canvas.height = img.height;
+                    ctx.drawImage(img, 0, 0);
+                };
+                img.src = data.imageData;
+            }
+
+            // Save button
+            document.getElementById('saveBtn').addEventListener('click', async () => {
+                try {
+                    await TreeStorage.save({
+                        ...data,
+                        timestamp: Date.now(),
+                    });
+                    showToast('💾 저장되었습니다');
+                } catch (e) {
+                    showToast('저장 실패: ' + e.message);
+                }
+            });
+
+            // Share button
+            document.getElementById('shareBtn').addEventListener('click', async () => {
+                const shareText = `🌳 나무 측정 결과\n높이: ${data.height?.toFixed(2) || '—'}m\n폭: ${data.width?.toFixed(2) || '—'}m\n거리: ${data.distance?.toFixed(2) || '—'}m`;
+
+                if (navigator.share) {
+                    try {
+                        await navigator.share({ title: 'TreeMeasure 결과', text: shareText });
+                    } catch (e) {
+                        // User cancelled
+                    }
+                } else {
+                    await navigator.clipboard.writeText(shareText);
+                    showToast('📋 클립보드에 복사됨');
+                }
+            });
+        });
+
+        function showToast(msg) {
+            const toast = document.getElementById('toast');
+            toast.textContent = msg;
+            toast.classList.add('show');
+            setTimeout(() => toast.classList.remove('show'), 2500);
+        }
+    </script>
+</body>
+
+</html>
