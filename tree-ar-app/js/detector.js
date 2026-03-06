@@ -1,181 +1,237 @@
 /**
- * detector.js — 마커 검출 모듈 (AR.js + js-aruco 하이브리드)
- * Phase 1에서는 간단한 시각적 마커 검출 시뮬레이션을 구현하고,
- * Phase 2에서 실제 AR.js / js-aruco 라이브러리를 통합한다.
+ * detector.js — Phase 2: AR.js + js-aruco 하이브리드 마커 검출
  *
- * 현재(Phase 1): Hiro 마커의 특징(검정 사각 테두리 + 내부 패턴)을
- * 캔버스 이미지 분석으로 검출하는 기본 구조만 구현.
- * 실제 마커 검출은 AR.js 라이브러리가 담당하며,
- * 여기서는 공통 인터페이스를 정의한다.
+ * AR.js (A-Frame 통합): Hiro/Custom .patt 패턴 마커 검출
+ * js-aruco: ArUco 바이너리 마커 검출 (폴백)
+ *
+ * 두 라이브러리를 공통 인터페이스로 통합하여 앱에 제공한다.
  */
 
 const Detector = (() => {
+    let markerSize = 0.20; // 20cm
     let isInitialized = false;
-    let markerSize = 0.20; // 20cm default
 
-    // 마커 상태
-    let lastDetected = null;
-    let detectionCallbacks = {
-        onFound: null,
-        onLost: null,
-    };
+    // 검출된 마커 상태
+    let activeMarker = null;
+    let markerDistance = 0;
+    let markerVisible = false;
+
+    // 콜백
+    let callbacks = { onFound: null, onLost: null };
+
+    // A-Frame 마커 엔티티 참조
+    let hiroMarkerEl = null;
+    let customMarkerEl = null;
+
+    // js-aruco 검출기 (ArUco 폴백)
+    let arucoDetector = null;
+    let arucoCanvas = null;
+    let arucoCtx = null;
 
     /**
-     * 검출기 초기화
-     * @param {Object} options
-     * @param {number} options.markerSize - 마커 실제 크기(미터)
-     * @param {Function} options.onFound - 마커 검출 시 콜백
-     * @param {Function} options.onLost - 마커 소실 시 콜백
+     * 초기화 — A-Frame 마커 이벤트 바인딩 + js-aruco 셋업
      */
     function init(options = {}) {
         markerSize = options.markerSize || 0.20;
-        detectionCallbacks.onFound = options.onFound || null;
-        detectionCallbacks.onLost = options.onLost || null;
+        callbacks.onFound = options.onFound || null;
+        callbacks.onLost = options.onLost || null;
+
+        // A-Frame 마커 이벤트 바인딩
+        setupAFrameMarkers();
+
+        // js-aruco 폴백 셋업
+        setupAruco();
+
         isInitialized = true;
-        console.log(`[Detector] 초기화 완료 (마커 크기: ${markerSize}m)`);
+        console.log('[Detector] Phase 2 초기화 완료 (AR.js + js-aruco)');
     }
 
     /**
-     * 프레임에서 마커 검출 시도
-     * Phase 1에서는 디바이스 방향 센서와 결합된 삼각측량 방식 사용.
-     *
-     * @param {ImageData} imageData - 비디오 프레임 이미지 데이터
-     * @returns {Object|null} 검출 결과 { id, corners, confidence, pixelSize }
+     * A-Frame 마커 이벤트 셋업
      */
-    function detect(imageData) {
-        if (!isInitialized) return null;
+    function setupAFrameMarkers() {
+        hiroMarkerEl = document.getElementById('hiroMarker');
+        customMarkerEl = document.getElementById('customMarker');
 
-        // Phase 1: 간단한 사각형 검출 (Adaptive Threshold + Contour)
-        const result = detectSquareMarker(imageData);
+        const markers = [hiroMarkerEl, customMarkerEl].filter(Boolean);
 
-        if (result && result.confidence > 0.4) {
-            if (!lastDetected) {
-                // 새로 검출
-                if (detectionCallbacks.onFound) {
-                    detectionCallbacks.onFound(result);
-                }
-            }
-            lastDetected = result;
-            return result;
-        } else {
-            if (lastDetected) {
-                // 소실
-                if (detectionCallbacks.onLost) {
-                    detectionCallbacks.onLost();
-                }
-            }
-            lastDetected = null;
-            return null;
-        }
+        markers.forEach((markerEl, idx) => {
+            const markerType = idx === 0 ? 'hiro' : 'custom';
+
+            markerEl.addEventListener('markerFound', () => {
+                console.log(`[Detector] AR.js 마커 검출: ${markerType}`);
+                markerVisible = true;
+
+                // 마커의 3D 위치에서 거리 계산
+                const pos = new THREE.Vector3();
+                markerEl.object3D.getWorldPosition(pos);
+                markerDistance = pos.length(); // 카메라(원점)로부터 거리
+
+                activeMarker = {
+                    id: idx,
+                    type: markerType,
+                    source: 'arjs',
+                    distance: markerDistance,
+                    position: { x: pos.x, y: pos.y, z: pos.z },
+                    confidence: 0.95,
+                    markerEl: markerEl,
+                };
+
+                if (callbacks.onFound) callbacks.onFound(activeMarker);
+            });
+
+            markerEl.addEventListener('markerLost', () => {
+                console.log(`[Detector] AR.js 마커 소실: ${markerType}`);
+                markerVisible = false;
+
+                // 약간의 딜레이 후 소실 처리 (순간적 소실 방지)
+                setTimeout(() => {
+                    if (!markerVisible) {
+                        activeMarker = null;
+                        if (callbacks.onLost) callbacks.onLost();
+                    }
+                }, 500);
+            });
+        });
     }
 
     /**
-     * 간단한 사각형 마커 검출 (Phase 1)
-     * 이미지에서 검은 사각 테두리를 찾아 마커 후보로 판단.
-     * 실제 패턴 매칭은 Phase 2에서 AR.js로 대체.
+     * js-aruco 폴백 셋업
+     * ArUco 마커 검출을 위한 캔버스 + 검출기 초기화
      */
-    function detectSquareMarker(imageData) {
-        const { width, height, data } = imageData;
-
-        // 그레이스케일 변환된 데이터에서 검은 사각형 영역 탐색
-        // 간단한 히스토그램 기반 검출 (프로토타입용)
-        let darkPixelCount = 0;
-        let darkCenterX = 0;
-        let darkCenterY = 0;
-        let minX = width, maxX = 0, minY = height, maxY = 0;
-
-        // 샘플링 (성능을 위해 4px 간격)
-        const step = 4;
-        for (let y = 0; y < height; y += step) {
-            for (let x = 0; x < width; x += step) {
-                const idx = (y * width + x) * 4;
-                const gray = (data[idx] + data[idx + 1] + data[idx + 2]) / 3;
-
-                // 매우 어두운 픽셀 (검정 테두리 후보)
-                if (gray < 60) {
-                    darkPixelCount++;
-                    darkCenterX += x;
-                    darkCenterY += y;
-                    if (x < minX) minX = x;
-                    if (x > maxX) maxX = x;
-                    if (y < minY) minY = y;
-                    if (y > maxY) maxY = y;
-                }
+    function setupAruco() {
+        try {
+            // js-aruco2가 로드되었는지 확인
+            if (typeof AR !== 'undefined' && AR.Detector) {
+                arucoDetector = new AR.Detector();
+                arucoCanvas = document.createElement('canvas');
+                arucoCanvas.width = 320;
+                arucoCanvas.height = 240;
+                arucoCtx = arucoCanvas.getContext('2d', { willReadFrequently: true });
+                console.log('[Detector] js-aruco 폴백 준비 완료');
+            } else {
+                console.log('[Detector] js-aruco 미로드 — AR.js 단독 모드');
             }
+        } catch (e) {
+            console.warn('[Detector] js-aruco 초기화 실패:', e);
         }
-
-        if (darkPixelCount < 50) return null;
-
-        darkCenterX /= darkPixelCount;
-        darkCenterY /= darkPixelCount;
-
-        const regionWidth = maxX - minX;
-        const regionHeight = maxY - minY;
-
-        // 사각형 비율 확인 (정사각형에 가까운지)
-        const aspectRatio = Math.min(regionWidth, regionHeight) /
-            Math.max(regionWidth, regionHeight);
-
-        if (aspectRatio < 0.5 || regionWidth < 30 || regionHeight < 30) {
-            return null;
-        }
-
-        // 검은 영역의 밀도 (테두리 같은 분포인지)
-        const expectedArea = regionWidth * regionHeight / (step * step);
-        const density = darkPixelCount / expectedArea;
-
-        // 테두리 패턴: 밀도가 0.15~0.5 사이 (속이 비어있는 사각형)
-        const isMarkerLike = density > 0.1 && density < 0.6;
-
-        if (!isMarkerLike) return null;
-
-        const confidence = Math.min(0.9, aspectRatio * (1 - Math.abs(density - 0.3)));
-        const pixelSize = (regionWidth + regionHeight) / 2;
-
-        return {
-            id: 0,
-            corners: [
-                [minX, minY],
-                [maxX, minY],
-                [maxX, maxY],
-                [minX, maxY],
-            ],
-            center: { x: darkCenterX, y: darkCenterY },
-            confidence: confidence,
-            pixelSize: pixelSize,
-            regionWidth: regionWidth,
-            regionHeight: regionHeight,
-        };
     }
 
     /**
-     * 마커 기반 거리 추정
-     * d ≈ (f × S) / p
-     * @param {number} pixelSize - 마커의 이미지 상 픽셀 크기
-     * @param {number} focalLength - 카메라 초점거리(px) - 기본 추정값 사용
-     * @returns {number} 거리 (미터)
+     * js-aruco로 비디오 프레임 검출 (폴백용)
+     * AR.js가 마커를 못 찾을 때 ArUco 마커 검출 시도
+     */
+    function detectAruco(videoElement) {
+        if (!arucoDetector || !videoElement || markerVisible) return null;
+
+        try {
+            arucoCtx.drawImage(videoElement, 0, 0, 320, 240);
+            const imageData = arucoCtx.getImageData(0, 0, 320, 240);
+            const markers = arucoDetector.detect(imageData);
+
+            if (markers.length > 0) {
+                const m = markers[0];
+                const corners = m.corners;
+
+                // 코너로부터 픽셀 크기 추정
+                const dx = corners[1].x - corners[0].x;
+                const dy = corners[1].y - corners[0].y;
+                const pixelSize = Math.sqrt(dx * dx + dy * dy);
+
+                // 거리 추정
+                const focalLength = 280; // 320px 해상도 기준 추정 초점거리
+                const dist = (focalLength * markerSize) / pixelSize;
+
+                activeMarker = {
+                    id: m.id,
+                    type: 'aruco',
+                    source: 'js-aruco',
+                    distance: dist,
+                    corners: corners,
+                    pixelSize: pixelSize,
+                    confidence: 0.85,
+                };
+
+                markerVisible = true;
+                if (callbacks.onFound) callbacks.onFound(activeMarker);
+                return activeMarker;
+            }
+        } catch (e) {
+            // 조용히 실패
+        }
+        return null;
+    }
+
+    /**
+     * 마커로부터 거리를 실시간 업데이트 (AR.js 기반)
+     * RAF 루프에서 호출
+     */
+    function updateDistance() {
+        if (!markerVisible || !activeMarker || !activeMarker.markerEl) return;
+
+        try {
+            const pos = new THREE.Vector3();
+            activeMarker.markerEl.object3D.getWorldPosition(pos);
+            markerDistance = pos.length();
+            activeMarker.distance = markerDistance;
+        } catch (e) {
+            // markerEl이 없는 경우 (ArUco 등)
+        }
+    }
+
+    /**
+     * 거리 추정 (공식: d = f × S / p)
+     * AR.js 활성 시 3D 포즈 기반 거리 사용
      */
     function estimateDistance(pixelSize, focalLength = 800) {
+        // AR.js가 활성이면 3D 포즈 거리를 우선 사용
+        if (markerVisible && activeMarker && activeMarker.source === 'arjs') {
+            return activeMarker.distance;
+        }
+        // 폴백: 픽셀 기반 거리 추정
         if (pixelSize <= 0) return Infinity;
         return (focalLength * markerSize) / pixelSize;
     }
 
     /**
-     * 현재 마커 상태
+     * 현재 활성 마커 반환
      */
-    function getLastDetection() {
-        return lastDetected;
+    function getActiveMarker() {
+        return activeMarker;
+    }
+
+    /**
+     * 현재 거리
+     */
+    function getDistance() {
+        return markerDistance;
+    }
+
+    /**
+     * 마커 가시성
+     */
+    function isVisible() {
+        return markerVisible;
     }
 
     function getMarkerSize() {
         return markerSize;
     }
 
+    // 하위 호환을 위한 별칭
+    function getLastDetection() {
+        return activeMarker;
+    }
+
     return {
         init,
-        detect,
+        detectAruco,
+        updateDistance,
         estimateDistance,
+        getActiveMarker,
         getLastDetection,
+        getDistance,
+        isVisible,
         getMarkerSize,
     };
 })();

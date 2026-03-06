@@ -6,71 +6,171 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
     <meta name="description" content="AR 마커 기반 나무 높이·폭 측정">
     <title>측정 중 — TreeMeasure</title>
+
+    <!-- A-Frame + AR.js CDN -->
+    <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
+    <script src="https://raw.githack.com/AR-js-org/AR.js/master/aframe/build/aframe-ar.js"></script>
+
     <link rel="stylesheet" href="css/style.css">
+    <style>
+        /* A-Frame scene overrides */
+        .a-enter-vr,
+        .a-orientation-modal {
+            display: none !important;
+        }
+
+        a-scene {
+            position: fixed;
+            top: 0;
+            left: 0;
+            z-index: 1;
+        }
+
+        /* Mode toggle */
+        .mode-toggle {
+            display: flex;
+            gap: 4px;
+            padding: 3px;
+            background: rgba(255, 255, 255, 0.08);
+            border-radius: 20px;
+        }
+
+        .mode-btn {
+            padding: 5px 14px;
+            border: none;
+            border-radius: 16px;
+            font-size: 0.78rem;
+            font-weight: 600;
+            cursor: pointer;
+            background: transparent;
+            color: rgba(255, 255, 255, 0.5);
+            transition: all 0.2s ease;
+            font-family: inherit;
+        }
+
+        .mode-btn.active {
+            background: rgba(108, 140, 255, 0.9);
+            color: #fff;
+            box-shadow: 0 2px 8px rgba(108, 140, 255, 0.3);
+        }
+
+        /* Distance info */
+        .distance-info {
+            position: fixed;
+            top: 50px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 110;
+            background: rgba(0, 0, 0, 0.6);
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 8px;
+            padding: 6px 14px;
+            font-size: 0.8rem;
+            color: rgba(255, 255, 255, 0.7);
+            display: none;
+            white-space: nowrap;
+        }
+
+        .distance-info.visible {
+            display: block;
+        }
+
+        .distance-info strong {
+            color: #4ade80;
+        }
+    </style>
 </head>
 
 <body>
 
-    <!-- Permission / Loading Overlay -->
-    <div class="overlay-screen" id="permissionScreen">
+    <!-- Loading Overlay -->
+    <div class="overlay-screen" id="loadingScreen">
         <div class="spinner"></div>
         <div class="overlay-icon">📷</div>
-        <h2 class="overlay-title">카메라 접근 허용</h2>
-        <p class="overlay-text">
-            나무를 측정하려면 카메라 권한이 필요합니다.<br>
-            브라우저 팝업에서 <strong>"허용"</strong>을 눌러주세요.
+        <h2 class="overlay-title" id="loadingTitle">AR 엔진 로딩 중...</h2>
+        <p class="overlay-text" id="loadingText">
+            A-Frame + AR.js를 초기화하고 있습니다.<br>
+            카메라 권한 팝업이 뜨면 <strong>"허용"</strong>을 눌러주세요.
         </p>
-        <button class="btn-primary" id="retryPermissionBtn" style="display:none;">
-            <span class="icon">🔄</span>
-            다시 시도
+        <button class="btn-primary" id="retryBtn" style="display:none;">
+            <span class="icon">🔄</span> 다시 시도
         </button>
     </div>
 
-    <!-- AR Container -->
-    <div class="ar-container" id="arContainer" style="display:none;">
-        <!-- Video element for camera feed -->
-        <video id="cameraVideo" autoplay playsinline muted style="width:100%;height:100%;object-fit:cover;"></video>
-        <!-- Canvas for drawing overlays -->
-        <canvas id="overlayCanvas"
-            style="position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;"></canvas>
+    <!-- A-Frame AR Scene -->
+    <a-scene id="arScene" embedded vr-mode-ui="enabled: false" renderer="logarithmicDepthBuffer: true; antialias: true"
+        arjs="sourceType: webcam; debugUIEnabled: false; detectionMode: mono_and_matrix; matrixCodeType: 3x3;"
+        style="display:none;">
+        <!-- Hiro 마커 (기본) -->
+        <a-marker id="hiroMarker" preset="hiro" size="0.20" smooth="true" smoothCount="5" smoothTolerance="0.01"
+            smoothThreshold="2" raycaster="objects: .clickable" emitevents="true">
+            <!-- 마커 인식 시 표시되는 3D 큐브 -->
+            <a-box position="0 0.02 0" scale="0.18 0.04 0.18"
+                material="color: #4ade80; opacity: 0.4; transparent: true"></a-box>
+            <!-- 수직 축 라인 (높이 참조) -->
+            <a-cylinder position="0 0.5 0" radius="0.003" height="1"
+                material="color: #4ade80; opacity: 0.6; transparent: true"></a-cylinder>
+        </a-marker>
 
-        <!-- Touch points will be dynamically added here -->
-        <div id="touchPointsContainer"></div>
+        <!-- Custom 마커 -->
+        <a-marker id="customMarker" type="pattern" url="markers/custom.patt" size="0.20" smooth="true" smoothCount="5"
+            emitevents="true">
+            <a-box position="0 0.02 0" scale="0.18 0.04 0.18"
+                material="color: #6c8cff; opacity: 0.4; transparent: true"></a-box>
+            <a-cylinder position="0 0.5 0" radius="0.003" height="1"
+                material="color: #6c8cff; opacity: 0.6; transparent: true"></a-cylinder>
+        </a-marker>
 
-        <!-- Status bar -->
-        <div class="ar-status-bar">
-            <div class="status-badge status-scanning" id="statusBadge">
-                <div class="status-dot"></div>
-                <span id="statusText">마커 검색 중...</span>
-            </div>
-            <a href="index.html" class="btn-round" title="홈으로">✕</a>
+        <a-entity camera></a-entity>
+    </a-scene>
+
+    <!-- Canvas Overlay (for measurement lines) -->
+    <canvas id="overlayCanvas"
+        style="position:fixed;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:10;"></canvas>
+
+    <!-- Touch points container -->
+    <div id="touchPointsContainer"
+        style="position:fixed;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:15;"></div>
+
+    <!-- Status bar -->
+    <div class="ar-status-bar" style="z-index:100;">
+        <div class="status-badge status-scanning" id="statusBadge">
+            <div class="status-dot"></div>
+            <span id="statusText">마커 검색 중...</span>
         </div>
+        <a href="index.html" class="btn-round" title="홈으로">✕</a>
+    </div>
 
-        <!-- Crosshair -->
-        <div class="crosshair" id="crosshair">
-            <div class="crosshair-circle"></div>
-        </div>
+    <!-- Distance info -->
+    <div class="distance-info" id="distanceInfo">
+        거리: <strong id="distanceValue">—</strong>m
+    </div>
 
-        <!-- Measurement display -->
-        <div class="measurement-display" id="measurementDisplay">
-            <div class="measurement-card">
-                <div class="measurement-value" id="heightValue">—</div>
-                <div class="measurement-label">높이 (m)</div>
-            </div>
-        </div>
-
-        <!-- Bottom controls -->
-        <div class="ar-controls">
-            <div class="ar-guide-text" id="guideText">마커를 카메라에 비추세요</div>
-            <div class="ar-button-row">
-                <button class="btn-round" id="torchBtn" title="플래시">🔦</button>
-                <button class="btn-capture" id="captureBtn" title="포인트 찍기" disabled></button>
-                <button class="btn-round" id="resetBtn" title="초기화">↺</button>
-            </div>
+    <!-- Measurement display -->
+    <div class="measurement-display" id="measurementDisplay" style="z-index:90;">
+        <div class="measurement-card">
+            <div class="measurement-value" id="measureValue">—</div>
+            <div class="measurement-label" id="measureLabel">높이 (m)</div>
         </div>
     </div>
 
-    <!-- Toast notification -->
+    <!-- Bottom controls -->
+    <div class="ar-controls" style="z-index:100;">
+        <div class="ar-guide-text" id="guideText">마커를 카메라에 비추세요</div>
+        <div class="ar-button-row">
+            <button class="btn-round" id="torchBtn" title="플래시">🔦</button>
+            <button class="btn-capture" id="captureBtn" title="포인트 찍기" disabled></button>
+            <div class="mode-toggle" id="modeToggle">
+                <button class="mode-btn active" data-mode="height">📏 높이</button>
+                <button class="mode-btn" data-mode="width">↔️ 폭</button>
+            </div>
+            <button class="btn-round" id="resetBtn" title="초기화">↺</button>
+        </div>
+    </div>
+
+    <!-- Toast -->
     <div class="toast" id="toast"></div>
 
     <script src="js/camera.js"></script>

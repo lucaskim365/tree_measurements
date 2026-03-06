@@ -1,17 +1,12 @@
 /**
- * storage.js — IndexedDB 데이터 저장
- * 측정 결과를 로컬에 영구 저장한다.
+ * storage.js — Phase 2: IndexedDB + GPS 통합 저장
  */
 
 const TreeStorage = (() => {
     const DB_NAME = 'TreeMeasureDB';
-    const DB_VERSION = 1;
+    const DB_VERSION = 2;
     const STORE_NAME = 'measurements';
 
-    /**
-     * IndexedDB 열기
-     * @returns {Promise<IDBDatabase>}
-     */
     function openDB() {
         return new Promise((resolve, reject) => {
             const request = indexedDB.open(DB_NAME, DB_VERSION);
@@ -24,6 +19,7 @@ const TreeStorage = (() => {
                         autoIncrement: true,
                     });
                     store.createIndex('timestamp', 'timestamp', { unique: false });
+                    store.createIndex('gps', ['gps.lat', 'gps.lng'], { unique: false });
                 }
             };
 
@@ -34,14 +30,14 @@ const TreeStorage = (() => {
 
     /**
      * 측정 데이터 저장
-     * @param {Object} data - { height, width, distance, imageData, gps, timestamp }
-     * @returns {Promise<number>} 저장된 레코드 ID
+     * GPS가 measure.js에서 이미 취득되었으면 그것을 사용하고,
+     * 없으면 여기서 다시 시도한다.
      */
     async function save(data) {
         const db = await openDB();
 
-        // GPS 추가
-        if (navigator.geolocation) {
+        // GPS가 없으면 여기서 취득 시도
+        if (!data.gps && navigator.geolocation) {
             try {
                 const pos = await new Promise((resolve, reject) => {
                     navigator.geolocation.getCurrentPosition(resolve, reject, {
@@ -53,11 +49,15 @@ const TreeStorage = (() => {
                     lat: pos.coords.latitude,
                     lng: pos.coords.longitude,
                     accuracy: pos.coords.accuracy,
+                    altitude: pos.coords.altitude,
                 };
             } catch (e) {
                 data.gps = null;
             }
         }
+
+        // 타임스탬프 보장
+        if (!data.timestamp) data.timestamp = Date.now();
 
         return new Promise((resolve, reject) => {
             const tx = db.transaction(STORE_NAME, 'readwrite');
@@ -68,10 +68,6 @@ const TreeStorage = (() => {
         });
     }
 
-    /**
-     * 모든 측정 데이터 조회 (최신순)
-     * @returns {Promise<Array>}
-     */
     async function getAll() {
         const db = await openDB();
         return new Promise((resolve, reject) => {
@@ -86,10 +82,6 @@ const TreeStorage = (() => {
         });
     }
 
-    /**
-     * 특정 측정 데이터 삭제
-     * @param {number} id
-     */
     async function remove(id) {
         const db = await openDB();
         return new Promise((resolve, reject) => {
@@ -101,9 +93,5 @@ const TreeStorage = (() => {
         });
     }
 
-    return {
-        save,
-        getAll,
-        remove,
-    };
+    return { save, getAll, remove };
 })();

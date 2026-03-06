@@ -1,57 +1,122 @@
 /**
- * measure.js — 측정 계산 모듈
- * 터치 포인트 2개를 기반으로 높이를 계산한다.
+ * measure.js — Phase 2: 높이 + 수관폭 측정 모듈
+ *
+ * 측정 모드:
+ *   height — 꼭대기~밑동 수직 거리 (높이)
+ *   width  — 좌~우 수평 거리 (수관폭)
  *
  * 측정 원리:
- *   - 마커에서 카메라까지 거리 d를 마커 픽셀 크기로 추정
- *   - 화면상 두 점의 y좌표 차이 → 실제 세계의 높이 차이로 변환
- *   - h = d × (Δpx / f)  (f: 초점거리)
+ *   h = d × (Δpx / f)
+ *   d: 카메라-마커 거리 (AR.js 3D 포즈 또는 마커 픽셀 크기 추정)
+ *   Δpx: 두 터치 점의 y축(높이) 또는 x축(폭) 픽셀 차이
+ *   f: 추정 초점거리 (px)
  */
 
 const Measure = (() => {
-    // 터치 포인트 저장
     let points = [];
+    let mode = 'height'; // 'height' | 'width'
 
-    // 추정 초점거리 (px) — 일반적인 모바일 카메라 기준
     const DEFAULT_FOCAL_LENGTH = 800;
 
-    // 화면/비디오 크기 매핑
     let videoWidth = 1280;
     let videoHeight = 720;
     let displayWidth = 0;
     let displayHeight = 0;
 
+    // GPS 좌표 캐시
+    let lastGPS = null;
+
     /**
      * 초기화
-     * @param {Object} opts
-     * @param {number} opts.videoWidth
-     * @param {number} opts.videoHeight
-     * @param {number} opts.displayWidth - 화면에 보이는 비디오 너비
-     * @param {number} opts.displayHeight - 화면에 보이는 비디오 높이
      */
     function init(opts) {
         videoWidth = opts.videoWidth || 1280;
         videoHeight = opts.videoHeight || 720;
         displayWidth = opts.displayWidth || window.innerWidth;
         displayHeight = opts.displayHeight || window.innerHeight;
+
+        // GPS 위치 추적 시작
+        startGPSTracking();
+    }
+
+    /**
+     * GPS 위치 추적 시작
+     */
+    function startGPSTracking() {
+        if (!navigator.geolocation) {
+            console.warn('[Measure] Geolocation API 미지원');
+            return;
+        }
+
+        // 초기 위치 취득
+        navigator.geolocation.getCurrentPosition(
+            (pos) => {
+                lastGPS = {
+                    lat: pos.coords.latitude,
+                    lng: pos.coords.longitude,
+                    accuracy: pos.coords.accuracy,
+                    altitude: pos.coords.altitude,
+                    timestamp: pos.timestamp,
+                };
+                console.log('[Measure] GPS 취득:', lastGPS);
+            },
+            (err) => console.warn('[Measure] GPS 실패:', err.message),
+            { enableHighAccuracy: true, timeout: 10000 }
+        );
+
+        // 지속적 추적 (위치 변경 시 업데이트)
+        navigator.geolocation.watchPosition(
+            (pos) => {
+                lastGPS = {
+                    lat: pos.coords.latitude,
+                    lng: pos.coords.longitude,
+                    accuracy: pos.coords.accuracy,
+                    altitude: pos.coords.altitude,
+                    timestamp: pos.timestamp,
+                };
+            },
+            () => { /* 무시 */ },
+            { enableHighAccuracy: true, maximumAge: 30000 }
+        );
+    }
+
+    /**
+     * 현재 GPS 위치 반환
+     */
+    function getGPS() {
+        return lastGPS;
+    }
+
+    /**
+     * 측정 모드 변경
+     * @param {'height'|'width'} newMode
+     */
+    function setMode(newMode) {
+        if (newMode === 'height' || newMode === 'width') {
+            mode = newMode;
+            points = [];
+            console.log(`[Measure] 모드 변경: ${mode}`);
+        }
+    }
+
+    /**
+     * 현재 모드
+     */
+    function getMode() {
+        return mode;
     }
 
     /**
      * 터치 포인트 추가 (화면 좌표)
-     * @param {number} screenX - 화면 x 좌표
-     * @param {number} screenY - 화면 y 좌표
-     * @returns {{ index: number, point: Object }} 추가된 포인트 정보
      */
     function addPoint(screenX, screenY) {
         if (points.length >= 2) {
-            // 3번째 이상은 리셋 후 시작
             points = [];
         }
 
         const point = {
             screenX,
             screenY,
-            // 화면 좌표를 비디오 좌표로 변환
             videoX: (screenX / displayWidth) * videoWidth,
             videoY: (screenY / displayHeight) * videoHeight,
             timestamp: Date.now(),
@@ -59,38 +124,47 @@ const Measure = (() => {
 
         points.push(point);
 
-        return {
-            index: points.length - 1,
-            point,
-        };
+        return { index: points.length - 1, point };
     }
 
     /**
-     * 현재 포인트들로 높이 계산
-     * @param {number} distance - 카메라-나무 거리 (미터)
-     * @param {number} focalLength - 카메라 초점거리 (px)
-     * @returns {Object|null} { height, distance, points }
+     * 높이 또는 폭 계산 (현재 모드에 따라)
+     * @param {number} distance - 카메라-나무 거리 (m)
+     * @param {number} focalLength - 초점거리 (px)
+     * @returns {Object|null}
      */
-    function calculateHeight(distance, focalLength = DEFAULT_FOCAL_LENGTH) {
+    function calculate(distance, focalLength = DEFAULT_FOCAL_LENGTH) {
         if (points.length < 2) return null;
 
         const p1 = points[0];
         const p2 = points[1];
 
-        // 비디오 좌표 기준 y축 픽셀 차이
+        // 비디오 좌표계 기준 차이
         const deltaPixelY = Math.abs(p2.videoY - p1.videoY);
-
-        // 실제 높이 = 거리 × (픽셀 차이 / 초점거리)
-        const height = distance * (deltaPixelY / focalLength);
-
-        // x축 차이 → 폭 추정 (보너스)
         const deltaPixelX = Math.abs(p2.videoX - p1.videoX);
-        const width = distance * (deltaPixelX / focalLength);
+
+        // 현재 모드에 따라 주요 측정값 결정
+        let primaryValue, secondaryValue;
+
+        if (mode === 'height') {
+            primaryValue = distance * (deltaPixelY / focalLength);   // 높이
+            secondaryValue = distance * (deltaPixelX / focalLength); // 폭 (보조)
+        } else {
+            primaryValue = distance * (deltaPixelX / focalLength);   // 폭
+            secondaryValue = distance * (deltaPixelY / focalLength); // 높이 (보조)
+        }
 
         return {
-            height: Math.round(height * 100) / 100,
-            width: Math.round(width * 100) / 100,
+            mode: mode,
+            height: mode === 'height'
+                ? Math.round(primaryValue * 100) / 100
+                : Math.round(secondaryValue * 100) / 100,
+            width: mode === 'width'
+                ? Math.round(primaryValue * 100) / 100
+                : Math.round(secondaryValue * 100) / 100,
+            primary: Math.round(primaryValue * 100) / 100,
             distance: Math.round(distance * 100) / 100,
+            gps: lastGPS,
             pixelDeltaY: deltaPixelY,
             pixelDeltaX: deltaPixelX,
             points: [...points],
@@ -98,23 +172,14 @@ const Measure = (() => {
     }
 
     /**
-     * 삼각측량 기반 높이 계산 (마커 없이 사용자 거리 입력 시)
-     * h = d × tan(θ_top) - d × tan(θ_bottom) + eyeHeight
-     * @param {number} distance - 나무까지 거리 (m)
-     * @param {number} angleTop - 꼭대기 기울기 (도)
-     * @param {number} angleBottom - 밑동 기울기 (도)
-     * @param {number} eyeHeight - 사용자 눈높이 (m, 기본 1.6)
-     * @returns {number} 높이 (m)
+     * 하위호환: calculateHeight
      */
-    function calculateByTriangulation(distance, angleTop, angleBottom, eyeHeight = 1.6) {
-        const radTop = (angleTop * Math.PI) / 180;
-        const radBottom = (angleBottom * Math.PI) / 180;
-
-        const height =
-            distance * Math.tan(radTop) -
-            distance * Math.tan(radBottom);
-
-        return Math.round(Math.abs(height) * 100) / 100;
+    function calculateHeight(distance, focalLength) {
+        const prevMode = mode;
+        mode = 'height';
+        const result = calculate(distance, focalLength);
+        mode = prevMode;
+        return result;
     }
 
     /**
@@ -124,16 +189,10 @@ const Measure = (() => {
         points = [];
     }
 
-    /**
-     * 현재 포인트 목록 반환
-     */
     function getPoints() {
         return [...points];
     }
 
-    /**
-     * 화면 크기 업데이트 (리사이즈 시)
-     */
     function updateDisplaySize(w, h) {
         displayWidth = w;
         displayHeight = h;
@@ -141,11 +200,14 @@ const Measure = (() => {
 
     return {
         init,
+        setMode,
+        getMode,
         addPoint,
+        calculate,
         calculateHeight,
-        calculateByTriangulation,
         reset,
         getPoints,
+        getGPS,
         updateDisplaySize,
     };
 })();

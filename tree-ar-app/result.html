@@ -7,6 +7,32 @@
     <meta name="description" content="나무 측정 결과">
     <title>측정 결과 — TreeMeasure</title>
     <link rel="stylesheet" href="css/style.css">
+    <style>
+        .gps-info {
+            width: 100%;
+            max-width: 480px;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-md);
+            padding: 14px 20px;
+            margin-bottom: 24px;
+            font-size: 0.82rem;
+            color: var(--text-muted);
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .gps-info .icon {
+            font-size: 1.2rem;
+        }
+
+        .gps-coords {
+            font-family: 'Fira Code', monospace;
+            font-size: 0.78rem;
+            color: var(--text);
+        }
+    </style>
 </head>
 
 <body>
@@ -39,6 +65,15 @@
             </div>
         </div>
 
+        <!-- GPS info -->
+        <div class="gps-info" id="gpsInfo" style="display:none;">
+            <span class="icon">📍</span>
+            <div>
+                <div style="margin-bottom:2px;">GPS 위치</div>
+                <div class="gps-coords" id="gpsCoords">—</div>
+            </div>
+        </div>
+
         <!-- Actions -->
         <div class="result-actions">
             <button class="btn-secondary" id="saveBtn">
@@ -54,21 +89,31 @@
 
     <script src="js/storage.js"></script>
     <script>
-        // Load measurement data from sessionStorage
         document.addEventListener('DOMContentLoaded', () => {
             const data = JSON.parse(sessionStorage.getItem('measurementResult') || '{}');
 
-            if (data.height) {
-                document.getElementById('resultHeight').textContent = data.height.toFixed(2);
+            // 측정값 표시
+            if (data.height != null) {
+                document.getElementById('resultHeight').textContent =
+                    typeof data.height === 'number' ? data.height.toFixed(2) : data.height;
             }
-            if (data.width) {
-                document.getElementById('resultWidth').textContent = data.width.toFixed(2);
+            if (data.width != null) {
+                document.getElementById('resultWidth').textContent =
+                    typeof data.width === 'number' ? data.width.toFixed(2) : data.width;
             }
-            if (data.distance) {
-                document.getElementById('resultDistance').textContent = data.distance.toFixed(2);
+            if (data.distance != null) {
+                document.getElementById('resultDistance').textContent =
+                    typeof data.distance === 'number' ? data.distance.toFixed(2) : data.distance;
             }
 
-            // Restore captured image
+            // GPS 표시
+            if (data.gps && data.gps.lat && data.gps.lng) {
+                document.getElementById('gpsInfo').style.display = 'flex';
+                document.getElementById('gpsCoords').textContent =
+                    `${data.gps.lat.toFixed(6)}, ${data.gps.lng.toFixed(6)} (±${Math.round(data.gps.accuracy || 0)}m)`;
+            }
+
+            // 캡처 이미지 복원
             if (data.imageData) {
                 const canvas = document.getElementById('resultCanvas');
                 const ctx = canvas.getContext('2d');
@@ -81,7 +126,7 @@
                 img.src = data.imageData;
             }
 
-            // Save button
+            // 저장 버튼
             document.getElementById('saveBtn').addEventListener('click', async () => {
                 try {
                     await TreeStorage.save({
@@ -94,16 +139,21 @@
                 }
             });
 
-            // Share button
+            // 공유 버튼
             document.getElementById('shareBtn').addEventListener('click', async () => {
-                const shareText = `🌳 나무 측정 결과\n높이: ${data.height?.toFixed(2) || '—'}m\n폭: ${data.width?.toFixed(2) || '—'}m\n거리: ${data.distance?.toFixed(2) || '—'}m`;
+                let shareText = `🌳 나무 측정 결과\n`;
+                shareText += `높이: ${data.height?.toFixed(2) || '—'}m\n`;
+                shareText += `폭: ${data.width?.toFixed(2) || '—'}m\n`;
+                shareText += `거리: ${data.distance?.toFixed(2) || '—'}m`;
+
+                if (data.gps && data.gps.lat) {
+                    shareText += `\n📍 GPS: ${data.gps.lat.toFixed(6)}, ${data.gps.lng.toFixed(6)}`;
+                }
 
                 if (navigator.share) {
                     try {
                         await navigator.share({ title: 'TreeMeasure 결과', text: shareText });
-                    } catch (e) {
-                        // User cancelled
-                    }
+                    } catch (e) { /* 취소 */ }
                 } else {
                     await navigator.clipboard.writeText(shareText);
                     showToast('📋 클립보드에 복사됨');

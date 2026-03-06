@@ -1,343 +1,362 @@
 /**
- * app.js — 메인 앱 컨트롤러
- * 카메라 → 마커 검출 → 측정 → 결과 플로우 전체를 관리한다.
+ * app.js — Phase 2: A-Frame + AR.js 통합 메인 컨트롤러
+ *
+ * 아키텍처:
+ *   A-Frame AR.js → 마커 검출 + 3D 포즈 추정
+ *   Detector.js   → 이벤트 래핑 + js-aruco 폴백
+ *   Measure.js    → 높이/폭 계산 + GPS
+ *   Canvas        → 2D 오버레이 (측정 라인, 포인트)
  */
 
 (function () {
     'use strict';
 
-    // ===== State =====
+    // ===== State Machine =====
     const State = {
-        IDLE: 'idle',
         LOADING: 'loading',
         SCANNING: 'scanning',
         READY: 'ready',
         MEASURING: 'measuring',
         DONE: 'done',
+        ERROR: 'error',
     };
 
-    let currentState = State.IDLE;
-    let animationFrameId = null;
+    let currentState = State.LOADING;
     let canvas, ctx;
-    let isMarkerFound = false;
-    let markerLostFrames = 0;
-    const MARKER_LOST_THRESHOLD = 15; // 15프레임 연속 미검출 시 lost
+    let animFrameId = null;
 
-    // ===== DOM =====
     const $ = (id) => document.getElementById(id);
 
-    // ===== Init =====
-    document.addEventListener('DOMContentLoaded', async () => {
-        // 이 스크립트는 measure.html에서 실행됨
-        const permissionScreen = $('permissionScreen');
-        const arContainer = $('arContainer');
-        const retryBtn = $('retryPermissionBtn');
+    // ===== Boot =====
+    document.addEventListener('DOMContentLoaded', () => {
+        const retryBtn = $('retryBtn');
 
-        setState(State.LOADING);
+        retryBtn.addEventListener('click', () => {
+            window.location.reload();
+        });
 
-        try {
-            // 카메라 초기화
-            const video = $('cameraVideo');
-            await Camera.init(video);
+        // A-Frame 씬 로드 대기
+        const scene = $('arScene');
 
-            // 카메라 해상도 가져오기
-            const resolution = Camera.getResolution();
-
-            // 캔버스 셋업
-            canvas = $('overlayCanvas');
-            canvas.width = resolution.width;
-            canvas.height = resolution.height;
-            ctx = canvas.getContext('2d');
-
-            // 측정 모듈 초기화
-            Measure.init({
-                videoWidth: resolution.width,
-                videoHeight: resolution.height,
-                displayWidth: window.innerWidth,
-                displayHeight: window.innerHeight,
-            });
-
-            // 마커 검출기 초기화
-            Detector.init({
-                markerSize: 0.20,
-                onFound: onMarkerFound,
-                onLost: onMarkerLost,
-            });
-
-            // Permission 성공 → AR 화면으로 전환
-            permissionScreen.style.display = 'none';
-            arContainer.style.display = 'block';
-
-            setState(State.SCANNING);
-
-            // 이벤트 바인딩
-            bindEvents();
-
-            // RAF 루프 시작
-            startDetectionLoop();
-
-        } catch (err) {
-            console.error('초기화 실패:', err);
-            // 카메라 권한 거부 또는 오류
-            const spinner = permissionScreen.querySelector('.spinner');
-            if (spinner) spinner.style.display = 'none';
-            retryBtn.style.display = 'inline-flex';
-
-            const overlayTitle = permissionScreen.querySelector('.overlay-title');
-            const overlayText = permissionScreen.querySelector('.overlay-text');
-
-            if (err.name === 'NotAllowedError') {
-                overlayTitle.textContent = '카메라 권한 거부됨';
-                overlayText.innerHTML = '브라우저 설정에서 카메라 권한을 허용한 후<br><strong>다시 시도</strong>해 주세요.';
-            } else {
-                overlayTitle.textContent = '카메라 오류';
-                overlayText.textContent = err.message || '카메라에 접근할 수 없습니다.';
-            }
-
-            retryBtn.addEventListener('click', () => {
-                window.location.reload();
-            });
+        if (!scene) {
+            showError('A-Frame 씬을 찾을 수 없습니다.');
+            return;
         }
+
+        // A-Frame이 준비되면 시작
+        if (scene.hasLoaded) {
+            onSceneReady();
+        } else {
+            scene.addEventListener('loaded', onSceneReady);
+        }
+
+        // 타임아웃 (20초 내 로드 실패 시)
+        setTimeout(() => {
+            if (currentState === State.LOADING) {
+                showError('AR 엔진 로딩 시간 초과. 인터넷 연결을 확인하세요.');
+            }
+        }, 20000);
     });
+
+    // ===== Scene Ready =====
+    function onSceneReady() {
+        console.log('[App] A-Frame 씬 로드 완료');
+
+        // 로딩 오버레이 숨기기
+        $('loadingScreen').classList.add('hidden');
+        $('arScene').style.display = '';
+
+        // 오버레이 캔버스 셋업
+        canvas = $('overlayCanvas');
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+        ctx = canvas.getContext('2d');
+
+        // Measure 초기화
+        Measure.init({
+            videoWidth: window.innerWidth,  // A-Frame은 전체 화면 사용
+            videoHeight: window.innerHeight,
+            displayWidth: window.innerWidth,
+            displayHeight: window.innerHeight,
+        });
+
+        // Detector 초기화 (A-Frame 마커 이벤트 바인딩)
+        Detector.init({
+            markerSize: 0.20,
+            onFound: onMarkerFound,
+            onLost: onMarkerLost,
+        });
+
+        // 이벤트 바인딩
+        bindEvents();
+
+        // 업데이트 루프 시작
+        startUpdateLoop();
+
+        setState(State.SCANNING);
+        showToast('📷 카메라 활성화 — 마커를 비추세요');
+    }
 
     // ===== Events =====
     function bindEvents() {
-        // 캡처 버튼 (포인트 찍기)
-        const captureBtn = $('captureBtn');
-        captureBtn.addEventListener('click', onCapturePoint);
+        // 캡처 버튼 (중앙 포인트)
+        $('captureBtn').addEventListener('click', (e) => {
+            e.stopPropagation();
+            addTouchPoint(window.innerWidth / 2, window.innerHeight / 2);
+        });
 
-        // 화면 터치로도 포인트 찍기
-        const arContainer = $('arContainer');
-        arContainer.addEventListener('click', (e) => {
-            // 컨트롤 영역 클릭은 무시
-            if (e.target.closest('.ar-controls') || e.target.closest('.ar-status-bar')) return;
+        // 화면 터치로 포인트
+        document.addEventListener('click', (e) => {
+            if (e.target.closest('.ar-controls') ||
+                e.target.closest('.ar-status-bar') ||
+                e.target.closest('.mode-toggle') ||
+                e.target.closest('.overlay-screen') ||
+                e.target.closest('a-scene')) return;
+
             if (currentState === State.READY || currentState === State.MEASURING) {
                 addTouchPoint(e.clientX, e.clientY);
             }
         });
 
-        // 토치 버튼
-        const torchBtn = $('torchBtn');
-        torchBtn.addEventListener('click', async () => {
+        // 화면 터치 (터치 이벤트 직접 처리)
+        document.addEventListener('touchstart', (e) => {
+            if (e.target.closest('.ar-controls') ||
+                e.target.closest('.ar-status-bar') ||
+                e.target.closest('.mode-toggle') ||
+                e.target.closest('.overlay-screen')) return;
+
+            if (currentState === State.READY || currentState === State.MEASURING) {
+                const touch = e.touches[0];
+                addTouchPoint(touch.clientX, touch.clientY);
+                e.preventDefault();
+            }
+        }, { passive: false });
+
+        // 모드 토글 (높이/폭)
+        const modeToggle = $('modeToggle');
+        modeToggle.addEventListener('click', (e) => {
+            const btn = e.target.closest('.mode-btn');
+            if (!btn) return;
+
+            const newMode = btn.dataset.mode;
+            modeToggle.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+
+            Measure.setMode(newMode);
+            resetMeasurement();
+
+            $('measureLabel').textContent = newMode === 'height' ? '높이 (m)' : '폭 (m)';
+            showToast(newMode === 'height' ? '📏 높이 측정 모드' : '↔️ 수관폭 측정 모드');
+        });
+
+        // 토치
+        $('torchBtn').addEventListener('click', async () => {
             try {
-                const on = await Camera.toggleTorch();
-                torchBtn.textContent = on ? '💡' : '🔦';
-                showToast(on ? '플래시 켜짐' : '플래시 꺼짐');
+                // A-Frame의 비디오 트랙에 접근
+                const videoEl = document.querySelector('video');
+                if (videoEl && videoEl.srcObject) {
+                    const track = videoEl.srcObject.getVideoTracks()[0];
+                    if (track) {
+                        const caps = track.getCapabilities();
+                        if (caps.torch) {
+                            const settings = track.getSettings();
+                            const on = !settings.torch;
+                            await track.applyConstraints({ advanced: [{ torch: on }] });
+                            $('torchBtn').textContent = on ? '💡' : '🔦';
+                            showToast(on ? '💡 플래시 켜짐' : '🔦 플래시 꺼짐');
+                            return;
+                        }
+                    }
+                }
+                showToast('이 기기는 플래시를 지원하지 않습니다');
             } catch (e) {
                 showToast('플래시를 사용할 수 없습니다');
             }
         });
 
-        // 리셋 버튼
-        const resetBtn = $('resetBtn');
-        resetBtn.addEventListener('click', () => {
+        // 리셋
+        $('resetBtn').addEventListener('click', () => {
             resetMeasurement();
-            showToast('초기화됨');
+            showToast('↺ 초기화됨');
         });
 
         // 리사이즈
         window.addEventListener('resize', () => {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
             Measure.updateDisplaySize(window.innerWidth, window.innerHeight);
         });
     }
 
-    // ===== Detection Loop (RAF) =====
-    function startDetectionLoop() {
-        const video = $('cameraVideo');
-        const detectionCanvas = document.createElement('canvas');
-        const detectionCtx = detectionCanvas.getContext('2d', { willReadFrequently: true });
-
-        // 검출용 해상도 (성능 최적화)
-        const DETECT_W = 320;
-        const DETECT_H = 240;
-        detectionCanvas.width = DETECT_W;
-        detectionCanvas.height = DETECT_H;
-
+    // ===== Update Loop =====
+    function startUpdateLoop() {
         function tick() {
-            if (video.readyState < 2) {
-                animationFrameId = requestAnimationFrame(tick);
-                return;
-            }
+            // 1. AR.js 거리 업데이트
+            Detector.updateDistance();
 
-            // 1. 축소 프레임 캡처 (검출용)
-            detectionCtx.drawImage(video, 0, 0, DETECT_W, DETECT_H);
-            const imageData = detectionCtx.getImageData(0, 0, DETECT_W, DETECT_H);
-
-            // 2. 마커 검출
-            const marker = Detector.detect(imageData);
-
-            // 3. 오버레이 그리기
-            drawOverlay(marker);
-
-            // 4. 마커 소실 체크
-            if (!marker) {
-                markerLostFrames++;
-                if (markerLostFrames > MARKER_LOST_THRESHOLD && isMarkerFound) {
-                    onMarkerLost();
+            // 2. 거리 표시 업데이트
+            if (Detector.isVisible()) {
+                const dist = Detector.getDistance();
+                if (dist > 0 && dist < 50) {
+                    $('distanceInfo').classList.add('visible');
+                    $('distanceValue').textContent = dist.toFixed(2);
                 }
             } else {
-                markerLostFrames = 0;
+                $('distanceInfo').classList.remove('visible');
             }
 
-            animationFrameId = requestAnimationFrame(tick);
-        }
+            // 3. js-aruco 폴백 (AR.js가 못 잡을 때)
+            if (!Detector.isVisible()) {
+                const videoEl = document.querySelector('video');
+                if (videoEl) {
+                    Detector.detectAruco(videoEl);
+                }
+            }
 
-        animationFrameId = requestAnimationFrame(tick);
+            // 4. 오버레이 그리기
+            drawOverlay();
+
+            animFrameId = requestAnimationFrame(tick);
+        }
+        animFrameId = requestAnimationFrame(tick);
     }
 
     // ===== Overlay Drawing =====
-    function drawOverlay(marker) {
+    function drawOverlay() {
         ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-        if (marker && isMarkerFound) {
-            // 마커 윤곽 그리기 (비디오 좌표를 캔버스 좌표로 스케일링)
-            const scaleX = canvas.width / 320;
-            const scaleY = canvas.height / 240;
-
-            ctx.strokeStyle = '#4ade80';
-            ctx.lineWidth = 3;
-            ctx.beginPath();
-            const corners = marker.corners;
-            ctx.moveTo(corners[0][0] * scaleX, corners[0][1] * scaleY);
-            for (let i = 1; i < corners.length; i++) {
-                ctx.lineTo(corners[i][0] * scaleX, corners[i][1] * scaleY);
-            }
-            ctx.closePath();
-            ctx.stroke();
-
-            // 중심에 십자 표시
-            const cx = marker.center.x * scaleX;
-            const cy = marker.center.y * scaleY;
-
-            ctx.strokeStyle = 'rgba(74, 222, 128, 0.7)';
-            ctx.lineWidth = 1;
-            ctx.beginPath();
-            ctx.moveTo(cx - 15, cy);
-            ctx.lineTo(cx + 15, cy);
-            ctx.moveTo(cx, cy - 15);
-            ctx.lineTo(cx, cy + 15);
-            ctx.stroke();
-
-            // 마커 크기/거리 표시
-            const dist = Detector.estimateDistance(marker.pixelSize * scaleX);
-            ctx.fillStyle = '#4ade80';
-            ctx.font = '14px Inter, sans-serif';
-            ctx.fillText(`거리: ${dist.toFixed(1)}m`, cx + 20, cy - 10);
-        }
-
-        // 터치 포인트 & 측정 라인 그리기
         const points = Measure.getPoints();
-        if (points.length > 0) {
-            points.forEach((p, i) => {
-                const sx = (p.videoX / canvas.width) * canvas.width;
-                const sy = (p.videoY / canvas.height) * canvas.height;
+        if (points.length === 0) return;
 
-                // 포인트
-                ctx.beginPath();
-                ctx.arc(sx, sy, 8, 0, Math.PI * 2);
-                ctx.fillStyle = 'rgba(74, 222, 128, 0.3)';
-                ctx.fill();
-                ctx.strokeStyle = '#4ade80';
-                ctx.lineWidth = 2;
-                ctx.stroke();
+        const mode = Measure.getMode();
 
-                // 중심점
-                ctx.beginPath();
-                ctx.arc(sx, sy, 3, 0, Math.PI * 2);
+        // 포인트 그리기
+        points.forEach((p, i) => {
+            const x = p.screenX;
+            const y = p.screenY;
+
+            // 외곽 원
+            ctx.beginPath();
+            ctx.arc(x, y, 12, 0, Math.PI * 2);
+            ctx.fillStyle = 'rgba(74, 222, 128, 0.2)';
+            ctx.fill();
+            ctx.strokeStyle = '#4ade80';
+            ctx.lineWidth = 2;
+            ctx.stroke();
+
+            // 내부 점
+            ctx.beginPath();
+            ctx.arc(x, y, 4, 0, Math.PI * 2);
+            ctx.fillStyle = '#4ade80';
+            ctx.fill();
+
+            // 라벨
+            ctx.fillStyle = '#fff';
+            ctx.font = 'bold 13px Inter, Noto Sans KR, sans-serif';
+            ctx.shadowColor = 'rgba(0,0,0,0.8)';
+            ctx.shadowBlur = 4;
+            if (mode === 'height') {
+                ctx.fillText(i === 0 ? '꼭대기' : '밑동', x + 16, y + 4);
+            } else {
+                ctx.fillText(i === 0 ? '왼쪽' : '오른쪽', x + 16, y + 4);
+            }
+            ctx.shadowBlur = 0;
+        });
+
+        // 두 점 사이 라인 및 치수
+        if (points.length === 2) {
+            const x1 = points[0].screenX, y1 = points[0].screenY;
+            const x2 = points[1].screenX, y2 = points[1].screenY;
+
+            // 측정 라인
+            ctx.setLineDash([8, 5]);
+            ctx.strokeStyle = '#4ade80';
+            ctx.lineWidth = 2;
+            ctx.shadowColor = 'rgba(74, 222, 128, 0.5)';
+            ctx.shadowBlur = 6;
+            ctx.beginPath();
+            ctx.moveTo(x1, y1);
+            ctx.lineTo(x2, y2);
+            ctx.stroke();
+            ctx.setLineDash([]);
+            ctx.shadowBlur = 0;
+
+            // 치수 라벨 (라인 중간)
+            const measurement = getCurrentMeasurement();
+            if (measurement) {
+                const mx = (x1 + x2) / 2 + 16;
+                const my = (y1 + y2) / 2;
+                const val = measurement.primary;
+                const label = mode === 'height' ? `높이: ${val}m` : `폭: ${val}m`;
+
+                // 배경
+                ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+                const textWidth = ctx.measureText(label).width;
+                ctx.fillRect(mx - 6, my - 16, textWidth + 12, 24);
+
+                // 텍스트
                 ctx.fillStyle = '#4ade80';
-                ctx.fill();
-
-                // 라벨
-                ctx.fillStyle = '#fff';
-                ctx.font = '12px Inter, sans-serif';
-                ctx.fillText(i === 0 ? '꼭대기' : '밑동', sx + 12, sy + 4);
-            });
-
-            // 두 점 사이 라인
-            if (points.length === 2) {
-                const sx1 = (points[0].videoX / canvas.width) * canvas.width;
-                const sy1 = (points[0].videoY / canvas.height) * canvas.height;
-                const sx2 = (points[1].videoX / canvas.width) * canvas.width;
-                const sy2 = (points[1].videoY / canvas.height) * canvas.height;
-
-                // 점선 라인
-                ctx.setLineDash([6, 4]);
-                ctx.strokeStyle = '#4ade80';
-                ctx.lineWidth = 2;
-                ctx.beginPath();
-                ctx.moveTo(sx1, sy1);
-                ctx.lineTo(sx2, sy2);
-                ctx.stroke();
-                ctx.setLineDash([]);
-
-                // 거리 라벨 (중간에)
-                const mx = (sx1 + sx2) / 2 + 16;
-                const my = (sy1 + sy2) / 2;
-                const measurement = getCurrentMeasurement();
-                if (measurement) {
-                    ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
-                    ctx.fillRect(mx - 4, my - 14, 80, 20);
-                    ctx.fillStyle = '#4ade80';
-                    ctx.font = 'bold 13px Inter, sans-serif';
-                    ctx.fillText(`${measurement.height.toFixed(2)}m`, mx, my);
-                }
+                ctx.font = 'bold 14px Inter, Noto Sans KR, sans-serif';
+                ctx.fillText(label, mx, my);
             }
         }
     }
 
     // ===== Marker Events =====
     function onMarkerFound(marker) {
-        isMarkerFound = true;
-        markerLostFrames = 0;
-
         const statusBadge = $('statusBadge');
         statusBadge.className = 'status-badge status-ready';
-        $('statusText').textContent = '마커 인식됨';
+
+        const source = marker.source === 'arjs' ? 'AR.js' : 'ArUco';
+        const type = marker.type === 'hiro' ? 'Hiro' : marker.type === 'custom' ? 'Custom' : `#${marker.id}`;
+        $('statusText').textContent = `${type} 마커 (${source})`;
 
         $('captureBtn').disabled = false;
-        $('guideText').textContent = '화면을 터치하여 꼭대기 → 밑동 포인트를 찍으세요';
+
+        const mode = Measure.getMode();
+        if (mode === 'height') {
+            $('guideText').textContent = '꼭대기 → 밑동 순서로 터치하세요';
+        } else {
+            $('guideText').textContent = '왼쪽 → 오른쪽 순서로 터치하세요';
+        }
 
         if (currentState === State.SCANNING) {
             setState(State.READY);
+            showToast(`✅ ${type} 마커 인식! (${source})`);
         }
-
-        showToast('✅ 마커 인식 성공!');
     }
 
     function onMarkerLost() {
-        isMarkerFound = false;
-
-        const statusBadge = $('statusBadge');
-        statusBadge.className = 'status-badge status-scanning';
+        $('statusBadge').className = 'status-badge status-scanning';
         $('statusText').textContent = '마커 검색 중...';
+        $('distanceInfo').classList.remove('visible');
 
         if (currentState === State.READY) {
             $('guideText').textContent = '마커를 카메라에 비추세요';
         }
-        // 측정 중이라면 데이터 유지
     }
 
     // ===== Touch Point Handling =====
-    function onCapturePoint() {
-        // 화면 중앙에 포인트 찍기 (크로스헤어 위치)
-        addTouchPoint(window.innerWidth / 2, window.innerHeight / 2);
-    }
-
     function addTouchPoint(screenX, screenY) {
-        const { index, point } = Measure.addPoint(screenX, screenY);
+        const { index } = Measure.addPoint(screenX, screenY);
 
-        // 화면에 터치 포인트 마커 표시
+        // HTML 터치 포인트 마커
         const container = $('touchPointsContainer');
+        const mode = Measure.getMode();
 
         if (index === 0) {
-            // 첫 번째 포인트 — 이전 것들 제거
             container.innerHTML = '';
             setState(State.MEASURING);
-            $('guideText').textContent = '밑동 위치를 터치하세요';
-            showToast('📍 꼭대기 포인트');
+            if (mode === 'height') {
+                $('guideText').textContent = '밑동 위치를 터치하세요';
+                showToast('📍 꼭대기 포인트');
+            } else {
+                $('guideText').textContent = '오른쪽 끝을 터치하세요';
+                showToast('📍 왼쪽 포인트');
+            }
         }
 
-        // 포인트 DOM 요소 생성
+        // 포인트 DOM
         const dot = document.createElement('div');
         dot.className = 'touch-point';
         dot.style.left = screenX + 'px';
@@ -345,108 +364,102 @@
         container.appendChild(dot);
 
         if (index === 1) {
-            // 두 번째 포인트 — 높이 계산
-            $('guideText').textContent = '측정 완료!';
-
+            // 측정 완료
+            setState(State.DONE);
             const measurement = getCurrentMeasurement();
+
             if (measurement) {
-                // 측정값 표시
-                $('heightValue').textContent = measurement.height.toFixed(2);
+                $('guideText').textContent = '측정 완료!';
+                $('measureValue').textContent = measurement.primary.toFixed(2);
+                $('measureLabel').textContent = mode === 'height' ? '높이 (m)' : '폭 (m)';
                 $('measurementDisplay').classList.add('active');
-                showToast(`📏 높이: ${measurement.height.toFixed(2)}m`);
 
-                // 두 포인트 사이 라인 표시
-                drawMeasurementLine(
-                    Measure.getPoints()[0],
-                    Measure.getPoints()[1],
-                    screenX, screenY
-                );
+                const label = mode === 'height' ? '높이' : '폭';
+                showToast(`📏 ${label}: ${measurement.primary.toFixed(2)}m`);
 
-                // 2초 후 결과 페이지로 이동
-                setTimeout(() => {
-                    goToResult(measurement);
-                }, 2000);
+                // 2.5초 후 결과 페이지로
+                setTimeout(() => goToResult(measurement), 2500);
             }
         }
     }
 
     function getCurrentMeasurement() {
-        const marker = Detector.getLastDetection();
-        let distance = 5; // 기본 거리 (마커 미검출 시 fallback)
+        let distance = Detector.getDistance();
 
-        if (marker) {
-            // 마커 검출 크기로 거리 추정 (320px 기준을 실제 해상도로 환산)
-            const resolution = Camera.getResolution();
-            const scale = resolution.width / 320;
-            distance = Detector.estimateDistance(marker.pixelSize * scale);
+        // 거리가 비정상이면 기본값 사용
+        if (!distance || distance <= 0 || distance > 50) {
+            distance = 5;
         }
 
-        return Measure.calculateHeight(distance);
-    }
+        // 초점거리 추정: A-Frame 카메라 FOV 기반
+        const fov = 45; // degrees (추정)
+        const focalLength = (window.innerHeight / 2) / Math.tan((fov / 2) * Math.PI / 180);
 
-    function drawMeasurementLine(p1, p2, endX, endY) {
-        const container = $('touchPointsContainer');
-        const firstPoint = container.querySelector('.touch-point');
-        if (!firstPoint) return;
-
-        const startX = parseFloat(firstPoint.style.left);
-        const startY = parseFloat(firstPoint.style.top);
-
-        const line = document.createElement('div');
-        line.className = 'measurement-line';
-        const dy = endY - startY;
-        const dx = endX - startX;
-        const length = Math.sqrt(dx * dx + dy * dy);
-        const angle = Math.atan2(dx, -dy) * (180 / Math.PI);
-
-        line.style.left = startX + 'px';
-        line.style.top = startY + 'px';
-        line.style.height = length + 'px';
-        line.style.transform = `rotate(${angle}deg)`;
-        container.appendChild(line);
+        return Measure.calculate(distance, focalLength);
     }
 
     // ===== Result =====
     function goToResult(measurement) {
-        // 현재 프레임 캡처
-        const imageData = Camera.captureFrame();
+        // 현재 화면 캡처
+        let imageData = null;
+        try {
+            const arCanvas = document.querySelector('a-scene canvas');
+            if (arCanvas) {
+                imageData = arCanvas.toDataURL('image/jpeg', 0.85);
+            }
+        } catch (e) {
+            console.warn('[App] 화면 캡처 실패:', e);
+        }
 
-        // sessionStorage에 결과 저장
+        // GPS 포함
+        const gps = Measure.getGPS();
+
         sessionStorage.setItem('measurementResult', JSON.stringify({
             height: measurement.height,
             width: measurement.width,
             distance: measurement.distance,
+            mode: measurement.mode,
+            primary: measurement.primary,
+            gps: gps,
             imageData: imageData,
             timestamp: Date.now(),
         }));
 
-        // 카메라 해제
-        Camera.stop();
-        cancelAnimationFrame(animationFrameId);
-
-        // 결과 페이지로 이동
+        if (animFrameId) cancelAnimationFrame(animFrameId);
         window.location.href = 'result.html';
     }
 
-    // ===== State Management =====
-    function setState(newState) {
-        currentState = newState;
-        console.log(`[App] State: ${newState}`);
+    // ===== State =====
+    function setState(s) {
+        currentState = s;
+        console.log(`[App] State → ${s}`);
     }
 
     function resetMeasurement() {
         Measure.reset();
         $('touchPointsContainer').innerHTML = '';
         $('measurementDisplay').classList.remove('active');
-        $('guideText').textContent = isMarkerFound
-            ? '화면을 터치하여 꼭대기 → 밑동 포인트를 찍으세요'
-            : '마커를 카메라에 비추세요';
 
-        if (isMarkerFound) {
+        const mode = Measure.getMode();
+        if (Detector.isVisible()) {
             setState(State.READY);
+            $('guideText').textContent = mode === 'height'
+                ? '꼭대기 → 밑동 순서로 터치하세요'
+                : '왼쪽 → 오른쪽 순서로 터치하세요';
         } else {
             setState(State.SCANNING);
+            $('guideText').textContent = '마커를 카메라에 비추세요';
         }
+    }
+
+    // ===== Error =====
+    function showError(msg) {
+        setState(State.ERROR);
+        $('loadingTitle').textContent = '오류 발생';
+        $('loadingText').textContent = msg;
+        const spinner = $('loadingScreen').querySelector('.spinner');
+        if (spinner) spinner.style.display = 'none';
+        $('retryBtn').style.display = 'inline-flex';
     }
 
     // ===== Toast =====
@@ -459,9 +472,6 @@
 
     // ===== Cleanup =====
     window.addEventListener('beforeunload', () => {
-        Camera.stop();
-        if (animationFrameId) {
-            cancelAnimationFrame(animationFrameId);
-        }
+        if (animFrameId) cancelAnimationFrame(animFrameId);
     });
 })();
