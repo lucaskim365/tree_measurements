@@ -26,6 +26,10 @@
     let animFrameId = null;
     let torchOn = false;
 
+    // QR 인식 시점에 잠금 — 카메라를 움직여도 유지됨
+    let lockedQRData  = null;  // 나무 ID 등
+    let lockedDistance = 0;    // 거리 (m)
+
     const $ = (id) => document.getElementById(id);
 
     // ===== Boot =====
@@ -179,8 +183,8 @@
     function startUpdateLoop(videoEl) {
         let frameCount = 0;
         function tick() {
-            // QR 감지: 6프레임마다 1회 (약 10fps) — getImageData 비용 절감
-            if (++frameCount % 6 === 0) {
+            // QR 감지: 3프레임마다 1회 (약 20fps) — 안정성과 성능의 균형
+            if (++frameCount % 3 === 0) {
                 Detector.detectQR(videoEl);
             }
 
@@ -280,21 +284,23 @@
 
     // ===== Marker Events =====
     function onMarkerFound(marker) {
+        // 거리·QR 데이터 잠금 (카메라를 움직여도 유지)
+        lockedDistance = marker.distance;
+        lockedQRData   = marker.qrData;
+
         $('statusBadge').className = 'status-badge status-ready';
         $('statusText').textContent = `QR 인식 (${marker.id})`;
         $('captureBtn').disabled = false;
 
         // QR 나무 정보 패널 표시
         const qd = marker.qrData;
-        const panel = $('treeInfoPanel');
         $('treeInfoId').textContent = `🌳 ${qd.id || 'QR 마커'}`;
-
         const metaParts = [];
-        if (qd.species) metaParts.push(`수종: ${qd.species}`);
+        if (qd.species)  metaParts.push(`수종: ${qd.species}`);
         if (qd.location) metaParts.push(`위치: ${qd.location}`);
-        if (qd.planted) metaParts.push(`식재: ${qd.planted}`);
+        if (qd.planted)  metaParts.push(`식재: ${qd.planted}`);
         $('treeInfoMeta').textContent = metaParts.join('  ·  ');
-        panel.classList.add('visible');
+        $('treeInfoPanel').classList.add('visible');
 
         const mode = Measure.getMode();
         $('guideText').textContent = mode === 'height'
@@ -303,19 +309,20 @@
 
         if (currentState === State.SCANNING) {
             setState(State.READY);
-            showToast(`✅ QR 인식! ${qd.species ? qd.species + ' · ' : ''}ID: ${qd.id || '—'}`);
+            showToast(`✅ QR 인식! ID: ${qd.id || '—'}  거리: ${lockedDistance.toFixed(2)}m`);
         }
     }
 
     function onMarkerLost() {
+        // READY·MEASURING·DONE 상태에서는 QR이 안 보여도 무시
+        // 이미 거리·ID가 잠금되어 있으므로 계속 측정 가능
+        if (currentState !== State.SCANNING) return;
+
         $('statusBadge').className = 'status-badge status-scanning';
         $('statusText').textContent = 'QR 코드 검색 중...';
         $('distanceInfo').classList.remove('visible');
         $('treeInfoPanel').classList.remove('visible');
-
-        if (currentState === State.READY) {
-            $('guideText').textContent = 'QR 코드를 카메라에 비추세요';
-        }
+        $('guideText').textContent = 'QR 코드를 카메라에 비추세요';
     }
 
     // ===== Touch Point Handling =====
@@ -362,7 +369,8 @@
     }
 
     function getCurrentMeasurement() {
-        let distance = Detector.getDistance();
+        // 잠금된 거리 사용 (QR이 화면에 없어도 측정 가능)
+        let distance = lockedDistance;
         let usedDefault = false;
 
         if (!distance || distance <= 0 || distance > 50) {
@@ -370,10 +378,8 @@
             usedDefault = true;
         }
 
-        // FOV 기반 초점거리 추정
-        const fov = 60; // 일반 스마트폰 수평 FOV 추정값
+        const fov = 60;
         const focalLength = (window.innerWidth / 2) / Math.tan((fov / 2) * Math.PI / 180);
-
         const result = Measure.calculate(distance, focalLength);
 
         if (result && usedDefault) {
@@ -401,7 +407,7 @@
         }
 
         const gps = Measure.getGPS();
-        const qrData = Detector.getQRData();
+        const qrData = lockedQRData;
 
         sessionStorage.setItem('measurementResult', JSON.stringify({
             height: measurement.height,
@@ -429,8 +435,11 @@
 
     function resetMeasurement() {
         Measure.reset();
+        lockedDistance = 0;
+        lockedQRData   = null;
         $('touchPointsContainer').innerHTML = '';
         $('measurementDisplay').classList.remove('active');
+        $('treeInfoPanel').classList.remove('visible');
 
         const mode = Measure.getMode();
         if (Detector.isVisible()) {

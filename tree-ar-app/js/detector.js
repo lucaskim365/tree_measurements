@@ -41,6 +41,13 @@ const Detector = (() => {
     // 마커 소실 디바운스 타이머
     let lostTimer = null;
 
+    // 연속 감지 카운터 — 노이즈 프레임 제거
+    // FOUND_THRESHOLD 회 연속 감지되어야 onFound 발동
+    // LOST_DEBOUNCE_MS 동안 미감지가 지속되어야 onLost 발동
+    const FOUND_THRESHOLD  = 3;     // 연속 3회 감지 → 인식 확정
+    const LOST_DEBOUNCE_MS = 2000;  // 2초간 미감지 → 소실 처리
+    let consecutiveHits = 0;
+
     /**
      * 초기화
      */
@@ -83,11 +90,12 @@ const Detector = (() => {
             });
 
             if (code) {
-                // 소실 타이머 취소
+                // 감지 성공 → 소실 타이머 취소, 연속 카운터 증가
                 if (lostTimer) {
                     clearTimeout(lostTimer);
                     lostTimer = null;
                 }
+                consecutiveHits++;
 
                 // QR 데이터 파싱
                 // 형식 A (파이프 ASCII): id|planted|size  ← 기본 형식
@@ -95,22 +103,19 @@ const Detector = (() => {
                 let parsed = null;
                 try {
                     if (code.data.startsWith('{')) {
-                        // JSON 형식 (구버전 호환)
                         const raw = JSON.parse(code.data);
-                        parsed = { id: raw.id || raw.id };
+                        parsed = { id: raw.id };
                         if (raw.species  || raw.sp)  parsed.species  = raw.species  || raw.sp;
                         if (raw.planted  || raw.dt)  parsed.planted  = raw.planted  || raw.dt;
                         if (raw.location || raw.loc) parsed.location = raw.location || raw.loc;
                         if (raw.manager  || raw.mgr) parsed.manager  = raw.manager  || raw.mgr;
                         if (raw.size     || raw.sz)  parsed.size     = raw.size     || raw.sz;
                     } else {
-                        // 파이프 형식: id|planted|size
                         const p = code.data.split('|');
                         parsed = { id: p[0] };
                         if (p[1]) parsed.planted = p[1];
                         if (p[2]) parsed.size    = parseInt(p[2]) || 20;
                     }
-                    // 마커 크기 업데이트 (cm → m)
                     if (parsed.size && typeof parsed.size === 'number') {
                         markerSize = parsed.size / 100;
                     }
@@ -124,22 +129,14 @@ const Detector = (() => {
                 const dx = loc.topRightCorner.x - loc.topLeftCorner.x;
                 const dy = loc.topRightCorner.y - loc.topLeftCorner.y;
                 const pixelSizeDetect = Math.sqrt(dx * dx + dy * dy);
-
-                // 감지 캔버스 → 실제 비디오 해상도 스케일 보정
                 const realWidth = videoElement.videoWidth || DETECT_WIDTH;
                 const scaleX = realWidth / DETECT_WIDTH;
                 const pixelSizeReal = pixelSizeDetect * scaleX;
-
                 let dist = pixelSizeReal > 0
                     ? (FOCAL_LENGTH * scaleX * markerSize) / pixelSizeReal
                     : 2.0;
-
-                // 물리적으로 불가능한 거리 클램핑 (0.3m ~ 30m)
                 dist = Math.max(0.3, Math.min(dist, 30));
                 markerDistance = dist;
-
-                const wasVisible = markerVisible;
-                markerVisible = true;
 
                 activeMarker = {
                     id: parsed.id || 'QR',
@@ -157,22 +154,26 @@ const Detector = (() => {
                     qrData: parsed,
                 };
 
-                if (!wasVisible && callbacks.onFound) {
-                    callbacks.onFound(activeMarker);
+                // FOUND_THRESHOLD 회 연속 감지되어야 "인식 확정"
+                if (!markerVisible && consecutiveHits >= FOUND_THRESHOLD) {
+                    markerVisible = true;
+                    if (callbacks.onFound) callbacks.onFound(activeMarker);
                 }
 
                 return activeMarker;
 
             } else {
-                // 이번 프레임에서 QR 미감지 → 디바운스 후 소실 처리
+                // 미감지 → 연속 카운터 리셋, LOST_DEBOUNCE_MS 후 소실 처리
+                consecutiveHits = 0;
                 if (markerVisible && !lostTimer) {
                     lostTimer = setTimeout(() => {
                         markerVisible = false;
                         activeMarker = null;
                         qrData = null;
+                        consecutiveHits = 0;
                         lostTimer = null;
                         if (callbacks.onLost) callbacks.onLost();
-                    }, 500);
+                    }, LOST_DEBOUNCE_MS);
                 }
             }
         } catch (e) {
