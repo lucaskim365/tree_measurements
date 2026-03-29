@@ -804,6 +804,34 @@ body {
 
 .mode-card.touch-mode:hover { border-color: rgba(108, 140, 255, 0.5); }
 .mode-card.tilt-mode:hover  { border-color: rgba(74, 222, 128, 0.5); }
+.mode-card.mode-3p:hover    { border-color: rgba(251, 191, 36, 0.5); }
+
+.mode-cards:has(.mode-3p) {
+  grid-template-columns: repeat(2, 1fr);
+}
+.mode-card.mode-3p {
+  grid-column: 1 / -1;
+  flex-direction: row;
+  justify-content: center;
+  gap: 14px;
+  padding: 18px 24px;
+  position: relative;
+}
+.mode-card.mode-3p .mode-card-icon { font-size: 2rem; }
+.mode-card.mode-3p .mode-card-title { font-size: 0.95rem; }
+
+.mode-card-badge {
+  position: absolute;
+  top: 8px;
+  right: 10px;
+  font-size: 0.66rem;
+  font-weight: 700;
+  background: rgba(251, 191, 36, 0.2);
+  color: #fbbd24;
+  border: 1px solid rgba(251, 191, 36, 0.4);
+  border-radius: 8px;
+  padding: 2px 7px;
+}
 
 .mode-card-icon { font-size: 2.4rem; }
 

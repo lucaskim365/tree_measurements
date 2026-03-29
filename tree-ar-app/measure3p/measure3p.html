@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="ko">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <meta name="description" content="QR 호모그래피 기반 3점 단일 프레임 나무 측정">
+    <title>3점 측정 — TreeMeasure</title>
+
+    <script src="../js/jsqr.min.js"></script>
+    <link rel="stylesheet" href="../css/style.css">
+
+    <style>
+        /* ── 보정 정보 패널 ── */
+        .calib-panel {
+            position: fixed;
+            top: 100px;
+            right: 12px;
+            background: rgba(0,0,0,0.65);
+            border: 1px solid rgba(255,255,255,0.15);
+            border-radius: 10px;
+            padding: 10px 14px;
+            font-size: 0.78rem;
+            color: #e0e0e0;
+            z-index: 90;
+            line-height: 1.7;
+            min-width: 130px;
+        }
+        .calib-panel .label { color: #aaa; font-size: 0.72rem; }
+        .calib-panel .val   { font-weight: 700; color: #fff; }
+        .calib-panel .samples { color: #6c8cff; }
+
+        /* ── 페이즈 바 (3 dots) ── */
+        .phase-bar {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            position: fixed;
+            top: 105px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 90;
+            background: rgba(0,0,0,0.6);
+            padding: 8px 18px;
+            border-radius: 20px;
+        }
+        .phase-dot {
+            width: 14px; height: 14px;
+            border-radius: 50%;
+            background: rgba(255,255,255,0.25);
+            border: 2px solid rgba(255,255,255,0.4);
+            transition: all 0.25s;
+        }
+        .phase-dot.done {
+            background: #6c8cff;
+            border-color: #6c8cff;
+            box-shadow: 0 0 8px rgba(108,140,255,0.7);
+        }
+        .phase-label {
+            font-size: 0.78rem;
+            color: #ccc;
+            white-space: nowrap;
+        }
+
+        /* ── 터치 포인트 마커 ── */
+        .touch-dot-3p {
+            position: fixed;
+            transform: translate(-50%, -50%);
+            background: rgba(108,140,255,0.9);
+            color: #fff;
+            font-size: 0.72rem;
+            font-weight: 700;
+            padding: 4px 9px;
+            border-radius: 12px;
+            pointer-events: none;
+            z-index: 20;
+            white-space: nowrap;
+            box-shadow: 0 2px 8px rgba(108,140,255,0.5);
+        }
+
+        /* ── 프레임 고정 버튼 ── */
+        .btn-lock {
+            padding: 10px 22px;
+            border: none;
+            border-radius: 20px;
+            font-size: 0.9rem;
+            font-weight: 700;
+            cursor: pointer;
+            background: rgba(108,140,255,0.9);
+            color: #fff;
+            box-shadow: 0 2px 12px rgba(108,140,255,0.4);
+            font-family: inherit;
+            transition: all 0.2s;
+        }
+        .btn-lock:disabled {
+            background: rgba(108,140,255,0.35);
+            box-shadow: none;
+            cursor: not-allowed;
+        }
+
+        /* ── iOS 기울기 권한 버튼 ── */
+        #orientPermBtn {
+            position: fixed;
+            bottom: 130px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 110;
+            display: none;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 18px;
+            background: rgba(255,160,80,0.9);
+            color: #fff;
+            font-size: 0.85rem;
+            font-weight: 700;
+            font-family: inherit;
+            cursor: pointer;
+        }
+
+        /* ── status-warning / status-lost (없으면 추가) ── */
+        .status-warning .status-dot { background: #f0a500; box-shadow: 0 0 0 4px rgba(240,165,0,0.3); }
+        .status-lost    .status-dot { background: #ff4d4d; box-shadow: 0 0 0 4px rgba(255,77,77,0.3); }
+        .status-found   .status-dot { background: #4caf50; box-shadow: 0 0 0 4px rgba(76,175,80,0.3); }
+    </style>
+</head>
+
+<body>
+
+    <!-- Loading Overlay -->
+    <div class="overlay-screen" id="loadingScreen">
+        <div class="spinner"></div>
+        <div class="overlay-icon">📷</div>
+        <h2 class="overlay-title" id="loadingTitle">카메라 초기화 중...</h2>
+        <p class="overlay-text" id="loadingText">
+            카메라 권한 팝업이 뜨면 <strong>"허용"</strong>을 눌러주세요.<br>
+            20×20cm QR 코드를 나무에 부착 후 비추세요.
+        </p>
+        <button class="btn-primary" id="retryBtn" style="display:none;">
+            <span class="icon">🔄</span> 다시 시도
+        </button>
+    </div>
+
+    <!-- Camera Video -->
+    <video id="cameraVideo" autoplay playsinline muted style="display:none;"></video>
+
+    <!-- Canvas Overlay (QR 윤곽선) -->
+    <canvas id="overlayCanvas"
+        style="position:fixed;top:0;left:0;width:100%;height:100%;z-index:10;touch-action:none;"></canvas>
+
+    <!-- Touch Points Container -->
+    <div id="touchPointsContainer"
+        style="position:fixed;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:20;"></div>
+
+    <!-- Status Bar -->
+    <div class="ar-status-bar" style="z-index:100;">
+        <div class="status-badge status-scanning" id="statusBadge">
+            <div class="status-dot"></div>
+            <span id="statusText">QR 코드 검색 중...</span>
+        </div>
+        <a href="../index.html" class="btn-round" title="홈으로">✕</a>
+    </div>
+
+    <!-- 보정 정보 패널 (FRAMING 상태에서만 표시) -->
+    <div class="calib-panel" id="distanceInfo" style="display:none;">
+        <div><span class="label">거리</span><br><span class="val" id="distValue">— m</span></div>
+        <div style="margin-top:6px;"><span class="label">f (보정)</span><br>
+            <span class="val" id="fValue">—</span>
+            <span class="samples" id="fSamples"> 0/8</span>
+        </div>
+    </div>
+
+    <!-- f Info (보정 패널 내부에 통합) -->
+    <div id="fInfo" style="display:none;"></div>
+
+    <!-- 페이즈 바 (MEASURING 상태) -->
+    <div class="phase-bar" id="phaseBar" style="display:none;">
+        <div class="phase-dot" title="꼭대기"></div>
+        <div class="phase-dot" title="밑동"></div>
+        <div class="phase-dot" title="수관끝"></div>
+        <span class="phase-label">터치로 측정</span>
+    </div>
+
+    <!-- Measurement Display -->
+    <div class="measurement-display" id="measurementDisplay" style="display:none;z-index:90;">
+        <div class="measurement-card">
+            <div class="measurement-value" id="measureValue">—</div>
+            <div class="measurement-label" id="measureLabel">포인트 0/3</div>
+        </div>
+    </div>
+
+    <!-- Bottom Controls -->
+    <div class="ar-controls" style="z-index:100;">
+        <div class="ar-guide-text" id="guideText">QR 코드를 카메라에 비추세요</div>
+        <div class="ar-button-row">
+            <button class="btn-round" id="torchBtn" title="플래시">🔦</button>
+            <button class="btn-lock" id="lockBtn" style="display:none;" disabled>📷 프레임 고정</button>
+            <button class="btn-round" id="resetBtn" title="초기화">↺</button>
+        </div>
+    </div>
+
+    <!-- iOS 기울기 권한 버튼 -->
+    <button id="orientPermBtn">📐 기울기 센서 허용</button>
+
+    <!-- Toast -->
+    <div class="toast" id="toast"></div>
+
+    <script src="../js/camera.js"></script>
+    <script src="js/homography.js"></script>
+    <script src="js/app-3p.js"></script>
+</body>
+
+</html>
