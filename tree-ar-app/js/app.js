@@ -30,6 +30,10 @@
     let lockedQRData  = null;  // 나무 ID 등
     let lockedDistance = 0;    // 거리 (m)
 
+    // 2단계 측정 흐름: height → width
+    let measurePhase = 'height'; // 'height' | 'width'
+    let heightResult = null;     // 높이 측정 결과 임시 저장
+
     // QR 가이드 스캔 라인 애니메이션
     let scanLineY = 0;
     let scanLineDir = 1;
@@ -136,21 +140,37 @@
             }
         }, { passive: false });
 
-        // 측정 모드 토글 (높이/폭)
-        const modeToggle = $('modeToggle');
-        modeToggle.addEventListener('click', (e) => {
-            const btn = e.target.closest('.mode-btn');
-            if (!btn) return;
+        // 다음 버튼 (높이 측정 완료 → 폭 측정으로)
+        $('nextBtn').addEventListener('click', () => {
+            $('nextBtn').style.display = 'none';
+            measurePhase = 'width';
+            Measure.setMode('width');
+            Measure.reset();
+            $('touchPointsContainer').innerHTML = '';
+            $('measurementDisplay').classList.remove('active');
+            setState(State.READY);
+            $('guideText').textContent = '왼쪽 끝을 터치하세요';
+            showToast('↔️ 폭 측정 — 왼쪽 → 오른쪽 순서로 터치하세요');
+        });
 
-            const newMode = btn.dataset.mode;
-            modeToggle.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
-            btn.classList.add('active');
-
-            Measure.setMode(newMode);
-            resetMeasurement();
-
-            $('measureLabel').textContent = newMode === 'height' ? '높이 (m)' : '폭 (m)';
-            showToast(newMode === 'height' ? '📏 높이 측정 모드' : '↔️ 수관폭 측정 모드');
+        // 종료 버튼 (폭 측정 완료 → 결과화면)
+        $('endBtn').addEventListener('click', () => {
+            const widthMeasurement = getCurrentMeasurement();
+            if (widthMeasurement && heightResult) {
+                goToResult({
+                    height: heightResult.primary,
+                    width: widthMeasurement.primary,
+                    distance: heightResult.distance,
+                    gps: widthMeasurement.gps || heightResult.gps,
+                });
+            } else if (widthMeasurement) {
+                goToResult({
+                    height: null,
+                    width: widthMeasurement.primary,
+                    distance: widthMeasurement.distance,
+                    gps: widthMeasurement.gps,
+                });
+            }
         });
 
         // 손전등
@@ -395,10 +415,7 @@
         $('treeInfoMeta').textContent = metaParts.join('  ·  ');
         $('treeInfoPanel').classList.add('visible');
 
-        const mode = Measure.getMode();
-        $('guideText').textContent = mode === 'height'
-            ? '꼭대기 → 밑동 순서로 터치하세요'
-            : '왼쪽 → 오른쪽 순서로 터치하세요';
+        $('guideText').textContent = '꼭대기 → 밑동 순서로 터치하세요';
 
         if (currentState === State.SCANNING) {
             setState(State.READY);
@@ -448,15 +465,22 @@
             const measurement = getCurrentMeasurement();
 
             if (measurement) {
-                $('guideText').textContent = '측정 완료!';
                 $('measureValue').textContent = measurement.primary.toFixed(2);
-                $('measureLabel').textContent = mode === 'height' ? '높이 (m)' : '폭 (m)';
-                $('measurementDisplay').classList.add('active');
 
-                const label = mode === 'height' ? '높이' : '폭';
-                showToast(`📏 ${label}: ${measurement.primary.toFixed(2)}m`);
-
-                setTimeout(() => goToResult(measurement), 2500);
+                if (measurePhase === 'height') {
+                    heightResult = measurement;
+                    $('guideText').textContent = '높이 측정 완료! 다음을 눌러 폭을 측정하세요';
+                    $('measureLabel').textContent = '높이 (m)';
+                    $('measurementDisplay').classList.add('active');
+                    showToast(`📏 높이: ${measurement.primary.toFixed(2)}m`);
+                    $('nextBtn').style.display = '';
+                } else {
+                    $('guideText').textContent = '폭 측정 완료! 종료를 눌러 결과를 확인하세요';
+                    $('measureLabel').textContent = '폭 (m)';
+                    $('measurementDisplay').classList.add('active');
+                    showToast(`↔️ 폭: ${measurement.primary.toFixed(2)}m`);
+                    $('endBtn').style.display = '';
+                }
             }
         }
     }
@@ -483,7 +507,7 @@
     }
 
     // ===== Result =====
-    function goToResult(measurement) {
+    function goToResult(combined) {
         // 현재 화면 캡처
         let imageData = null;
         try {
@@ -499,16 +523,13 @@
             console.warn('[App] 화면 캡처 실패:', e);
         }
 
-        const gps = Measure.getGPS();
         const qrData = lockedQRData;
 
         const payload = {
-            height: measurement.height,
-            width: measurement.width,
-            distance: measurement.distance,
-            mode: measurement.mode,
-            primary: measurement.primary,
-            gps: gps,
+            height: combined.height,
+            width: combined.width,
+            distance: combined.distance,
+            gps: combined.gps || Measure.getGPS(),
             treeData: qrData,
             treeId: qrData ? qrData.id : null,
             imageData: imageData,
@@ -542,11 +563,16 @@
 
     function resetMeasurement() {
         Measure.reset();
+        Measure.setMode('height');
         lockedDistance = 0;
         lockedQRData   = null;
+        measurePhase   = 'height';
+        heightResult   = null;
         $('touchPointsContainer').innerHTML = '';
         $('measurementDisplay').classList.remove('active');
         $('treeInfoPanel').classList.remove('visible');
+        $('nextBtn').style.display = 'none';
+        $('endBtn').style.display  = 'none';
 
         const mode = Measure.getMode();
         if (Detector.isVisible()) {

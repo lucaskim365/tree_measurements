@@ -52,6 +52,25 @@
             box-shadow: 0 2px 8px rgba(108, 140, 255, 0.3);
         }
 
+        .btn-next {
+            padding: 10px 24px;
+            border: none;
+            border-radius: 20px;
+            font-size: 0.9rem;
+            font-weight: 700;
+            cursor: pointer;
+            background: rgba(108, 140, 255, 0.9);
+            color: #fff;
+            box-shadow: 0 2px 12px rgba(108, 140, 255, 0.4);
+            font-family: inherit;
+            transition: all 0.2s ease;
+        }
+
+        .btn-next.btn-end {
+            background: rgba(74, 222, 128, 0.9);
+            box-shadow: 0 2px 12px rgba(74, 222, 128, 0.4);
+        }
+
         /* Distance info */
         .distance-info {
             position: fixed;
@@ -177,10 +196,8 @@
         <div class="ar-button-row">
             <button class="btn-round" id="torchBtn" title="플래시">🔦</button>
             <button class="btn-capture" id="captureBtn" title="포인트 찍기" disabled></button>
-            <div class="mode-toggle" id="modeToggle">
-                <button class="mode-btn active" data-mode="height">📏 높이</button>
-                <button class="mode-btn" data-mode="width">↔️ 폭</button>
-            </div>
+            <button class="btn-next" id="nextBtn" style="display:none;">다음 →</button>
+            <button class="btn-next btn-end" id="endBtn" style="display:none;">종료 ✓</button>
             <button class="btn-round" id="resetBtn" title="초기화">↺</button>
         </div>
     </div>
