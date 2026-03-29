@@ -502,7 +502,7 @@
         const gps = Measure.getGPS();
         const qrData = lockedQRData;
 
-        sessionStorage.setItem('measurementResult', JSON.stringify({
+        const payload = {
             height: measurement.height,
             width: measurement.width,
             distance: measurement.distance,
@@ -513,7 +513,21 @@
             treeId: qrData ? qrData.id : null,
             imageData: imageData,
             timestamp: Date.now(),
-        }));
+        };
+
+        // sessionStorage 저장 (imageData로 인한 QuotaExceededError 방어)
+        try {
+            sessionStorage.setItem('measurementResult', JSON.stringify(payload));
+        } catch (e) {
+            // 용량 초과 시 이미지 제외 후 재시도
+            console.warn('[App] sessionStorage 용량 초과, imageData 제외 후 재시도:', e);
+            payload.imageData = null;
+            try {
+                sessionStorage.setItem('measurementResult', JSON.stringify(payload));
+            } catch (e2) {
+                console.error('[App] sessionStorage 저장 실패:', e2);
+            }
+        }
 
         if (animFrameId) cancelAnimationFrame(animFrameId);
         Measure.stop();

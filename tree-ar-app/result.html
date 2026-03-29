@@ -122,6 +122,12 @@
                 📤 공유
             </button>
         </div>
+
+        <div style="margin-top:12px;text-align:center;">
+            <a href="history.html" style="font-size:0.85rem;color:var(--text-muted);text-decoration:none;">
+                📋 저장된 기록 보기
+            </a>
+        </div>
     </div>
 
     <div class="toast" id="toast"></div>
@@ -185,15 +191,22 @@
             }
 
             // 저장 버튼
-            document.getElementById('saveBtn').addEventListener('click', async () => {
+            const saveBtn = document.getElementById('saveBtn');
+            saveBtn.addEventListener('click', async () => {
+                saveBtn.disabled = true;
+                saveBtn.textContent = '저장 중...';
                 try {
                     await TreeStorage.save({
                         ...data,
                         timestamp: Date.now(),
                     });
-                    showToast('💾 저장되었습니다');
+                    saveBtn.textContent = '✅ 저장됨';
+                    showToast('💾 저장되었습니다 — 기록 보기에서 확인하세요');
                 } catch (e) {
-                    showToast('저장 실패: ' + e.message);
+                    console.error('[Result] 저장 실패:', e);
+                    saveBtn.disabled = false;
+                    saveBtn.textContent = '💾 저장';
+                    showToast('❌ 저장 실패: ' + e.message);
                 }
             });
 

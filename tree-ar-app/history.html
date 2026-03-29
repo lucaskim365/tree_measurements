@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>측정 기록 — TreeMeasure</title>
+    <link rel="stylesheet" href="css/style.css">
+    <style>
+        body { background: var(--bg); min-height: 100vh; }
+
+        .history-page {
+            max-width: 540px;
+            margin: 0 auto;
+            padding: 20px 16px 80px;
+        }
+
+        .history-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 24px;
+        }
+
+        .history-header h1 {
+            font-size: 1.25rem;
+            font-weight: 700;
+        }
+
+        .history-count {
+            font-size: 0.82rem;
+            color: var(--text-muted);
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 60px 20px;
+            color: var(--text-muted);
+        }
+
+        .empty-state .icon { font-size: 3rem; margin-bottom: 12px; }
+        .empty-state p { font-size: 0.9rem; margin-top: 8px; }
+
+        .record-list {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .record-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-md);
+            padding: 16px;
+            position: relative;
+        }
+
+        .record-header {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            margin-bottom: 10px;
+        }
+
+        .record-tree {
+            font-size: 0.95rem;
+            font-weight: 700;
+            color: #6c8cff;
+        }
+
+        .record-date {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            white-space: nowrap;
+        }
+
+        .record-values {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 8px;
+            margin-bottom: 10px;
+        }
+
+        .record-val {
+            background: var(--bg);
+            border-radius: var(--radius-sm);
+            padding: 8px;
+            text-align: center;
+        }
+
+        .record-val .v {
+            font-size: 1.1rem;
+            font-weight: 700;
+            color: var(--text);
+        }
+
+        .record-val .l {
+            font-size: 0.7rem;
+            color: var(--text-muted);
+            margin-top: 2px;
+        }
+
+        .record-meta {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+
+        .record-actions {
+            display: flex;
+            gap: 8px;
+            margin-top: 12px;
+        }
+
+        .btn-del {
+            background: rgba(239, 68, 68, 0.12);
+            color: #ef4444;
+            border: 1px solid rgba(239, 68, 68, 0.25);
+            border-radius: var(--radius-sm);
+            padding: 6px 14px;
+            font-size: 0.8rem;
+            cursor: pointer;
+            flex: 1;
+        }
+
+        .btn-share-sm {
+            background: rgba(108, 140, 255, 0.12);
+            color: #6c8cff;
+            border: 1px solid rgba(108, 140, 255, 0.25);
+            border-radius: var(--radius-sm);
+            padding: 6px 14px;
+            font-size: 0.8rem;
+            cursor: pointer;
+            flex: 1;
+        }
+
+        .btn-clear-all {
+            background: rgba(239, 68, 68, 0.1);
+            color: #ef4444;
+            border: 1px solid rgba(239, 68, 68, 0.2);
+            border-radius: var(--radius-sm);
+            padding: 6px 14px;
+            font-size: 0.8rem;
+            cursor: pointer;
+        }
+
+        .record-image {
+            width: 100%;
+            border-radius: var(--radius-sm);
+            margin-bottom: 10px;
+            max-height: 180px;
+            object-fit: cover;
+            display: block;
+            background: var(--bg);
+        }
+
+        .mode-badge {
+            display: inline-block;
+            background: rgba(74, 222, 128, 0.15);
+            color: #4ade80;
+            border-radius: 4px;
+            padding: 2px 8px;
+            font-size: 0.7rem;
+            font-weight: 600;
+        }
+    </style>
+</head>
+<body>
+
+<div class="history-page">
+    <div class="history-header">
+        <div>
+            <a href="index.html" style="font-size:0.85rem;color:var(--text-muted);text-decoration:none;">← 홈</a>
+            <h1 style="margin-top:4px;">📋 측정 기록</h1>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;">
+            <span class="history-count" id="recordCount"></span>
+            <button class="btn-clear-all" id="clearAllBtn" style="display:none;">전체 삭제</button>
+        </div>
+    </div>
+
+    <div id="emptyState" class="empty-state" style="display:none;">
+        <div class="icon">📭</div>
+        <div style="font-weight:600;">저장된 기록이 없습니다</div>
+        <p>측정 완료 후 결과 화면에서<br>💾 저장 버튼을 누르면 여기에 표시됩니다</p>
+        <a href="measure.html" class="btn-primary" style="display:inline-flex;margin-top:24px;padding:12px 28px;">📐 측정 시작</a>
+    </div>
+
+    <div class="record-list" id="recordList"></div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script src="js/storage.js"></script>
+<script>
+    document.addEventListener('DOMContentLoaded', async () => {
+        await loadRecords();
+
+        document.getElementById('clearAllBtn').addEventListener('click', async () => {
+            if (!confirm('모든 기록을 삭제하시겠습니까?')) return;
+            const records = await TreeStorage.getAll();
+            for (const r of records) await TreeStorage.remove(r.id);
+            await loadRecords();
+            showToast('전체 기록이 삭제되었습니다');
+        });
+    });
+
+    async function loadRecords() {
+        const list = document.getElementById('recordList');
+        const empty = document.getElementById('emptyState');
+        const countEl = document.getElementById('recordCount');
+        const clearBtn = document.getElementById('clearAllBtn');
+
+        list.innerHTML = '';
+
+        let records = [];
+        try {
+            records = await TreeStorage.getAll();
+        } catch (e) {
+            list.innerHTML = `<p style="color:var(--text-muted);text-align:center;padding:40px 0;">
+                기록을 불러오지 못했습니다.<br>
+                <small>${e.message}</small></p>`;
+            return;
+        }
+
+        if (records.length === 0) {
+            empty.style.display = 'block';
+            countEl.textContent = '';
+            clearBtn.style.display = 'none';
+            return;
+        }
+
+        empty.style.display = 'none';
+        countEl.textContent = `총 ${records.length}건`;
+        clearBtn.style.display = 'inline-block';
+
+        records.forEach(r => {
+            const card = buildCard(r);
+            list.appendChild(card);
+        });
+    }
+
+    function buildCard(r) {
+        const card = document.createElement('div');
+        card.className = 'record-card';
+
+        const treeLabel = (r.treeData && r.treeData.id)
+            ? `🌳 ${r.treeData.id}`
+            : '🌳 나무';
+        const modeLabel = r.mode === 'height' ? '높이 측정' : '수관폭 측정';
+        const dateStr = r.timestamp
+            ? new Date(r.timestamp).toLocaleString('ko-KR', {
+                month: '2-digit', day: '2-digit',
+                hour: '2-digit', minute: '2-digit'
+              })
+            : '—';
+
+        const heightVal = (r.height != null) ? r.height.toFixed(2) : '—';
+        const widthVal  = (r.width  != null) ? r.width.toFixed(2)  : '—';
+        const distVal   = (r.distance != null) ? r.distance.toFixed(2) : '—';
+
+        let gpsHtml = '';
+        if (r.gps && r.gps.lat) {
+            gpsHtml = `<span>📍 ${r.gps.lat.toFixed(5)}, ${r.gps.lng.toFixed(5)}</span>`;
+        }
+
+        let speciesHtml = '';
+        if (r.treeData && r.treeData.species) {
+            speciesHtml = `<span>수종: ${r.treeData.species}</span>`;
+        }
+
+        let imageHtml = '';
+        if (r.imageData) {
+            imageHtml = `<img class="record-image" src="${r.imageData}" alt="측정 사진">`;
+        }
+
+        card.innerHTML = `
+            ${imageHtml}
+            <div class="record-header">
+                <div>
+                    <div class="record-tree">${treeLabel}</div>
+                    <span class="mode-badge">${modeLabel}</span>
+                </div>
+                <div class="record-date">${dateStr}</div>
+            </div>
+            <div class="record-values">
+                <div class="record-val">
+                    <div class="v">${heightVal}</div>
+                    <div class="l">높이 (m)</div>
+                </div>
+                <div class="record-val">
+                    <div class="v">${widthVal}</div>
+                    <div class="l">폭 (m)</div>
+                </div>
+                <div class="record-val">
+                    <div class="v">${distVal}</div>
+                    <div class="l">거리 (m)</div>
+                </div>
+            </div>
+            <div class="record-meta">
+                ${speciesHtml}
+                ${gpsHtml}
+            </div>
+            <div class="record-actions">
+                <button class="btn-share-sm share-btn">📤 공유</button>
+                <button class="btn-del del-btn">🗑 삭제</button>
+            </div>
+        `;
+
+        card.querySelector('.del-btn').addEventListener('click', async () => {
+            await TreeStorage.remove(r.id);
+            await loadRecords();
+            showToast('기록이 삭제되었습니다');
+        });
+
+        card.querySelector('.share-btn').addEventListener('click', async () => {
+            let text = `🌳 나무 측정 결과\n`;
+            if (r.treeData && r.treeData.id) text += `ID: ${r.treeData.id}\n`;
+            if (r.treeData && r.treeData.species) text += `수종: ${r.treeData.species}\n`;
+            text += `높이: ${heightVal}m\n폭: ${widthVal}m\n거리: ${distVal}m`;
+            if (r.gps && r.gps.lat) text += `\n📍 ${r.gps.lat.toFixed(6)}, ${r.gps.lng.toFixed(6)}`;
+            if (navigator.share) {
+                try { await navigator.share({ title: 'TreeMeasure', text }); } catch (_) {}
+            } else {
+                await navigator.clipboard.writeText(text);
+                showToast('📋 클립보드에 복사됨');
+            }
+        });
+
+        return card;
+    }
+
+    function showToast(msg) {
+        const t = document.getElementById('toast');
+        t.textContent = msg;
+        t.classList.add('show');
+        setTimeout(() => t.classList.remove('show'), 2500);
+    }
+</script>
+</body>
+</html>
