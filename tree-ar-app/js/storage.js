@@ -4,7 +4,7 @@
 
 const TreeStorage = (() => {
     const DB_NAME = 'TreeMeasureDB';
-    const DB_VERSION = 2;
+    const DB_VERSION = 3;
     const STORE_NAME = 'measurements';
 
     function openDB() {
@@ -13,14 +13,17 @@ const TreeStorage = (() => {
 
             request.onupgradeneeded = (event) => {
                 const db = event.target.result;
-                if (!db.objectStoreNames.contains(STORE_NAME)) {
-                    const store = db.createObjectStore(STORE_NAME, {
-                        keyPath: 'id',
-                        autoIncrement: true,
-                    });
-                    store.createIndex('timestamp', 'timestamp', { unique: false });
-                    store.createIndex('gps', ['gps.lat', 'gps.lng'], { unique: false });
+                // 기존 스토어 삭제 후 재생성 (v2 → v3 스키마 변경)
+                if (db.objectStoreNames.contains(STORE_NAME)) {
+                    db.deleteObjectStore(STORE_NAME);
                 }
+                const store = db.createObjectStore(STORE_NAME, {
+                    keyPath: 'id',
+                    autoIncrement: true,
+                });
+                store.createIndex('timestamp', 'timestamp', { unique: false });
+                store.createIndex('treeId', 'treeId', { unique: false });
+                store.createIndex('lat', 'lat', { unique: false });
             };
 
             request.onsuccess = () => resolve(request.result);

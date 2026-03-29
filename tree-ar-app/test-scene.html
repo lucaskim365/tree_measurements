@@ -1,0 +1,540 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>현장 테스트 화면 — TreeMeasure</title>
+    <script src="js/qrcode.min.js"></script>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            font-family: 'Segoe UI', system-ui, sans-serif;
+            background: #1a1a1a;
+            color: #eee;
+            height: 100vh;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* ── 헤더 ── */
+        header {
+            background: #111;
+            border-bottom: 1px solid #333;
+            padding: 10px 20px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            flex-shrink: 0;
+        }
+        header h1 { font-size: 0.95rem; font-weight: 700; color: #fff; }
+        header p  { font-size: 0.72rem; color: #888; margin-top: 1px; }
+        .how-to-badge {
+            background: #2ecc71; color: #fff;
+            font-size: 0.7rem; font-weight: 700;
+            padding: 4px 12px; border-radius: 20px; white-space: nowrap;
+        }
+
+        /* ── 3단 레이아웃 ── */
+        .layout {
+            display: grid;
+            grid-template-columns: 240px 1fr 220px;
+            flex: 1;
+            overflow: hidden;
+        }
+
+        /* ── 왼쪽 패널 ── */
+        .side-panel {
+            background: #1e1e1e;
+            border-right: 1px solid #333;
+            padding: 14px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 0;
+        }
+
+        .panel-title {
+            font-size: 0.72rem; font-weight: 700;
+            color: #888; text-transform: uppercase;
+            letter-spacing: 0.06em; margin-bottom: 10px;
+        }
+
+        .tree-item {
+            background: #2a2a2a;
+            border: 2px solid transparent;
+            border-radius: 9px;
+            padding: 10px 12px;
+            margin-bottom: 6px;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+        .tree-item:hover  { border-color: #555; }
+        .tree-item.active { border-color: #4ade80; background: #182818; }
+        .tree-item .name  { font-size: 0.85rem; font-weight: 700; color: #fff; margin-bottom: 3px; }
+        .tree-item .tid   { font-size: 0.68rem; color: #6c8cff; font-family: monospace; margin-bottom: 5px; }
+        .tree-item .dims  { display: flex; gap: 6px; }
+        .dim-badge {
+            background: #333; border-radius: 4px;
+            padding: 1px 7px; font-size: 0.68rem; color: #bbb;
+        }
+        .dim-badge span { color: #4ade80; font-weight: 700; }
+
+        hr.div { border: none; border-top: 1px solid #333; margin: 12px 0; }
+
+        /* 스캔용 QR */
+        .qr-wrap {
+            background: #fff;
+            border-radius: 8px;
+            padding: 10px;
+            text-align: center;
+            flex-shrink: 0;
+        }
+        .qr-wrap canvas, .qr-wrap img { display: block; margin: 0 auto; width: 190px !important; height: 190px !important; }
+        .qr-hint { font-size: 0.65rem; color: #888; margin-top: 5px; }
+
+        /* ── 가운데 장면 ── */
+        .scene {
+            position: relative;
+            overflow: hidden;
+            background: linear-gradient(180deg, #6ab8e8 0%, #9ecf7a 68%, #5a8a3c 100%);
+        }
+
+        /* SVG는 scene을 꽉 채움 */
+        #treeSVG {
+            position: absolute;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+        }
+
+        /* QR 마커 (scene 위) */
+        .scene-qr {
+            position: absolute;
+            background: #fff;
+            border: 3px solid #222;
+            border-radius: 3px;
+            padding: 3px;
+            z-index: 10;
+        }
+        .scene-qr canvas, .scene-qr img { display: block; width: 68px !important; height: 68px !important; }
+        .scene-qr-label {
+            position: absolute;
+            bottom: -20px; left: 50%;
+            transform: translateX(-50%);
+            background: rgba(0,0,0,0.75);
+            color: #4ade80;
+            font-size: 0.6rem; font-weight: 700;
+            padding: 2px 7px; border-radius: 4px;
+            white-space: nowrap;
+        }
+
+        /* 참조선 */
+        .ref-h {
+            position: absolute; left: 0; right: 0;
+            border-top: 2px dashed rgba(255, 80, 80, 0.8);
+            pointer-events: none; z-index: 5;
+        }
+        .ref-h .rl {
+            position: absolute; right: 10px; top: -11px;
+            background: rgba(220,50,50,0.85); color: #fff;
+            font-size: 0.65rem; font-weight: 700;
+            padding: 1px 7px; border-radius: 3px;
+        }
+        .ref-v {
+            position: absolute; top: 0; bottom: 0;
+            border-left: 2px dashed rgba(80, 220, 80, 0.8);
+            pointer-events: none; z-index: 5;
+        }
+        .ref-v .rl {
+            position: absolute; bottom: 10px; left: 6px;
+            background: rgba(40,180,40,0.85); color: #fff;
+            font-size: 0.65rem; font-weight: 700;
+            padding: 1px 7px; border-radius: 3px;
+        }
+
+        /* ── 오른쪽 패널 ── */
+        .info-panel {
+            background: #1e1e1e;
+            border-left: 1px solid #333;
+            padding: 14px;
+            overflow-y: auto;
+        }
+
+        .steps { list-style: none; margin-bottom: 12px; }
+        .steps li {
+            display: flex; gap: 8px;
+            font-size: 0.75rem; color: #ccc;
+            line-height: 1.5; margin-bottom: 10px;
+        }
+        .step-n {
+            min-width: 20px; height: 20px;
+            background: #6c8cff; color: #fff;
+            border-radius: 50%; font-size: 0.65rem; font-weight: 700;
+            display: flex; align-items: center; justify-content: center;
+            flex-shrink: 0; margin-top: 1px;
+        }
+
+        .info-card {
+            background: #2a2a2a; border-radius: 7px;
+            padding: 9px 12px; margin-bottom: 7px;
+        }
+        .info-card .lbl { font-size: 0.65rem; color: #777; margin-bottom: 2px; }
+        .info-card .val { font-size: 0.88rem; font-weight: 700; color: #4ade80; }
+        .info-card .val.blue { color: #a0d8ff; }
+
+        .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
+
+        .answer-btn {
+            width: 100%; padding: 7px;
+            background: #2a2a2a; border: 1px solid #444; border-radius: 6px;
+            color: #aaa; font-size: 0.75rem; cursor: pointer; margin-top: 10px;
+        }
+        .answer-btn:hover { background: #333; }
+
+        .answer-box {
+            display: none;
+            background: #111828; border: 1px solid #2a3a5a;
+            border-radius: 7px; padding: 10px; margin-top: 7px;
+        }
+        .answer-box.show { display: block; }
+        .ans-row {
+            display: flex; justify-content: space-between;
+            font-size: 0.73rem; padding: 4px 0;
+            border-bottom: 1px solid #1a2a3a;
+        }
+        .ans-row:last-child { border-bottom: none; }
+        .ans-row .k { color: #778; }
+        .ans-row .v { color: #6c8cff; font-weight: 700; }
+
+        .tip {
+            background: #182818; border: 1px solid #2a4a2a;
+            border-radius: 7px; padding: 9px 11px;
+            font-size: 0.72rem; color: #8ecf8e;
+            line-height: 1.6; margin-top: 8px;
+        }
+        .warn {
+            background: #28221a; border: 1px solid #4a3a10;
+            border-radius: 7px; padding: 9px 11px;
+            font-size: 0.72rem; color: #c8a850;
+            line-height: 1.6; margin-top: 7px;
+        }
+    </style>
+</head>
+<body>
+
+<header>
+    <div>
+        <h1>🌳 TreeMeasure — 현장 테스트 화면</h1>
+        <p>실제 현장 없이 QR 마커 측정을 테스트합니다</p>
+    </div>
+    <div class="how-to-badge">📱 다른 기기로 QR 스캔</div>
+</header>
+
+<div class="layout">
+
+    <!-- ── 왼쪽 ── -->
+    <div class="side-panel">
+        <div class="panel-title">샘플 나무 선택</div>
+        <div id="treeList"></div>
+
+        <hr class="div">
+
+        <div class="panel-title">QR 마커 (스캔용)</div>
+        <div class="qr-wrap">
+            <div id="sideQR"></div>
+            <div class="qr-hint">← 스마트폰으로 이 QR을 스캔하세요</div>
+        </div>
+        <div style="font-size:0.65rem;color:#555;text-align:center;margin-top:6px;">마커 기준 크기: 20 × 20cm</div>
+    </div>
+
+    <!-- ── 가운데 장면 ── -->
+    <div class="scene" id="scene">
+        <svg id="treeSVG" xmlns="http://www.w3.org/2000/svg"></svg>
+
+        <!-- QR 마커 (밑동) -->
+        <div class="scene-qr" id="sceneQR">
+            <div id="sceneQRCanvas"></div>
+            <div class="scene-qr-label" id="sceneQRLabel">QR</div>
+        </div>
+
+        <!-- 참조선 -->
+        <div class="ref-h" id="refTop"><div class="rl">꼭대기</div></div>
+        <div class="ref-h" id="refBot"><div class="rl">밑동</div></div>
+        <div class="ref-v" id="refL"><div class="rl">왼쪽</div></div>
+        <div class="ref-v" id="refR"><div class="rl">오른쪽</div></div>
+    </div>
+
+    <!-- ── 오른쪽 ── -->
+    <div class="info-panel">
+        <div class="panel-title">사용 방법</div>
+        <ul class="steps">
+            <li><div class="step-n">1</div><div>왼쪽에서 나무를 선택</div></li>
+            <li><div class="step-n">2</div><div>스마트폰에서 <strong>measure.html</strong>을 열고 왼쪽 QR 코드를 스캔</div></li>
+            <li><div class="step-n">3</div><div><span style="color:#ff8080">빨간 선</span>(꼭대기·밑동)을 터치 → 수고 측정</div></li>
+            <li><div class="step-n">4</div><div><span style="color:#80cc80">초록 선</span>(좌·우)을 터치 → 수관폭 측정</div></li>
+            <li><div class="step-n">5</div><div>아래 정답과 오차 비교</div></li>
+        </ul>
+
+        <hr class="div" style="border-color:#2a2a2a;">
+
+        <div class="panel-title">현재 나무 정보</div>
+        <div class="info-card">
+            <div class="lbl">나무 ID</div>
+            <div class="val" style="font-size:0.78rem;" id="infoId">—</div>
+        </div>
+        <div class="info-card">
+            <div class="lbl">수종</div>
+            <div class="val blue" id="infoSpecies">—</div>
+        </div>
+        <div class="two-col">
+            <div class="info-card">
+                <div class="lbl">수고</div>
+                <div class="val" id="infoH">—</div>
+            </div>
+            <div class="info-card">
+                <div class="lbl">수관폭</div>
+                <div class="val" id="infoW">—</div>
+            </div>
+        </div>
+
+        <button class="answer-btn" onclick="toggleAnswer()">🔍 정답 보기 / 숨기기</button>
+        <div class="answer-box" id="ansBox">
+            <div class="ans-row"><span class="k">수고</span><span class="v" id="ansH">—</span></div>
+            <div class="ans-row"><span class="k">수관폭</span><span class="v" id="ansW">—</span></div>
+            <div class="ans-row"><span class="k">식재년월</span><span class="v" id="ansP">—</span></div>
+            <div class="ans-row"><span class="k">위치</span><span class="v" id="ansL">—</span></div>
+        </div>
+
+        <div class="tip">
+            ✅ <strong>정확도 기준</strong><br>
+            ±10% 이내 → 양호<br>
+            ±20% 이내 → 허용<br>
+            ±20% 초과 → QR 크기·거리 재확인
+        </div>
+        <div class="warn">
+            ⚠️ 화면-카메라 간 거리가 실제 현장보다 훨씬 가깝습니다. 측정값은 참고용입니다.
+        </div>
+    </div>
+
+</div>
+
+<script>
+const SAMPLES = [
+    { id:'TREE-TEST-001', species:'소나무',      planted:'2005-03', location:'A구역 1번',  manager:'산림청',      size:20, height_m:12.5, width_m:5.2,  style:'conifer' },
+    { id:'TREE-TEST-002', species:'느티나무',     planted:'1998-04', location:'B구역 광장', manager:'서울시',      size:20, height_m:9.8,  width_m:8.4,  style:'round'   },
+    { id:'TREE-TEST-003', species:'은행나무',     planted:'2012-10', location:'C구역 가로수',manager:'구청',       size:20, height_m:7.2,  width_m:4.1,  style:'oval'    },
+    { id:'TREE-TEST-004', species:'메타세쿼이아', planted:'2003-05', location:'D구역 산책로',manager:'국립공원',   size:20, height_m:18.3, width_m:3.8,  style:'tall'    },
+    { id:'TREE-TEST-005', species:'벚나무',       planted:'2015-03', location:'E구역 공원', manager:'시설관리공단',size:20, height_m:6.5,  width_m:6.8,  style:'spread'  },
+];
+
+let currentIdx = 0;
+
+/* ── 나무 목록 렌더링 ── */
+function renderList() {
+    const el = document.getElementById('treeList');
+    el.innerHTML = '';
+    SAMPLES.forEach((t, i) => {
+        const d = document.createElement('div');
+        d.className = 'tree-item' + (i === currentIdx ? ' active' : '');
+        d.innerHTML = `
+            <div class="name">🌳 ${t.species}</div>
+            <div class="tid">${t.id}</div>
+            <div class="dims">
+                <div class="dim-badge">수고 <span>${t.height_m}m</span></div>
+                <div class="dim-badge">폭 <span>${t.width_m}m</span></div>
+            </div>`;
+        d.onclick = () => select(i);
+        el.appendChild(d);
+    });
+}
+
+/* ── 나무 선택 ── */
+function select(idx) {
+    currentIdx = idx;
+    renderList();
+    const t = SAMPLES[idx];
+
+    document.getElementById('infoId').textContent      = t.id;
+    document.getElementById('infoSpecies').textContent = t.species;
+    document.getElementById('infoH').textContent       = t.height_m + 'm';
+    document.getElementById('infoW').textContent       = t.width_m  + 'm';
+    document.getElementById('ansH').textContent        = t.height_m + 'm';
+    document.getElementById('ansW').textContent        = t.width_m  + 'm';
+    document.getElementById('ansP').textContent        = t.planted;
+    document.getElementById('ansL').textContent        = t.location;
+
+    const json = compactJson({
+        id: t.id, species: t.species, planted: t.planted,
+        location: t.location, manager: t.manager, size: t.size,
+    });
+
+    /* QR 생성 */
+    generateQR('sideQR',      json, 200);
+    generateQR('sceneQRCanvas', json, 68);
+    document.getElementById('sceneQRLabel').textContent = t.id;
+
+    drawScene(t);
+}
+
+/* ── QR 인코딩: ASCII 전용 (id|planted|size)
+   한글은 qrcodejs 인코딩 오류 유발 → 라벨 인쇄 텍스트로만 표시 */
+function compactJson(obj) {
+    return [obj.id || '', obj.planted || '', obj.size || 20].join('|');
+}
+
+/* ── QR 생성 (qrcodejs: new QRCode(div, {...})) ── */
+function generateQR(divId, data, size) {
+    const container = document.getElementById(divId);
+    container.innerHTML = ''; // 이전 QR 제거
+    new QRCode(container, {
+        text: data,
+        width: size,
+        height: size,
+        colorDark: '#000000',
+        colorLight: '#ffffff',
+        correctLevel: QRCode.CorrectLevel.L,
+    });
+}
+
+/* ── SVG 나무 장면 그리기 ── */
+function drawScene(tree) {
+    const scene = document.getElementById('scene');
+    const sw = scene.clientWidth;
+    const sh = scene.clientHeight;
+    if (sw === 0 || sh === 0) { setTimeout(() => drawScene(tree), 50); return; }
+
+    const svg = document.getElementById('treeSVG');
+    svg.setAttribute('viewBox', `0 0 ${sw} ${sh}`);
+    svg.innerHTML = '';
+
+    const groundY = sh * 0.82;
+    const treeH   = sh * 0.72;                      // 화면 72% 높이
+    const trunkH  = treeH * 0.25;
+    const trunkW  = Math.max(10, treeH * 0.04);
+    const canopyH = treeH - trunkH;
+    const canopyW = canopyH * (tree.width_m / tree.height_m) * 1.15;
+    const cx      = sw / 2;
+    const topY    = groundY - treeH;
+    const trunkTopY = groundY - trunkH;
+
+    /* 하늘 그라디언트 */
+    const defs = el('defs');
+    const skyGrad = el('linearGradient', { id:'sky', x1:'0', y1:'0', x2:'0', y2:'1' });
+    skyGrad.innerHTML = '<stop offset="0%" stop-color="#5aaedc"/><stop offset="100%" stop-color="#9ecf7a"/>';
+    defs.appendChild(skyGrad);
+    svg.appendChild(defs);
+
+    /* 배경 */
+    svg.appendChild(el('rect', { x:0, y:0, width:sw, height:sh, fill:'url(#sky)' }));
+
+    /* 태양 */
+    svg.appendChild(el('circle', { cx: sw*0.82, cy: sh*0.1, r:28, fill:'#ffe566', opacity:0.9 }));
+
+    /* 구름 2개 */
+    cloud(svg, sw*0.15, sh*0.08, 70, 22);
+    cloud(svg, sw*0.35, sh*0.05, 50, 16);
+
+    /* 지면 */
+    svg.appendChild(el('rect', { x:0, y:groundY, width:sw, height:sh-groundY, fill:'#5a8a3c' }));
+    /* 잔디 선 */
+    for (let gx = 15; gx < sw; gx += 20) {
+        svg.appendChild(el('line', { x1:gx, y1:groundY, x2:gx+4, y2:groundY-8,
+            stroke:'#4a7a2a', 'stroke-width':1.5 }));
+    }
+
+    /* 줄기 */
+    svg.appendChild(el('rect', {
+        x: cx - trunkW/2, y: trunkTopY, width: trunkW, height: trunkH,
+        fill:'#7a5533', rx: trunkW*0.3,
+    }));
+
+    /* 수관 */
+    const color = treeColor(tree.style);
+    drawCanopy(svg, tree.style, cx, topY, canopyW, canopyH, color);
+
+    /* 참조선 배치 */
+    pos('refTop', 'top', topY    + 'px');
+    pos('refBot', 'top', groundY + 'px');
+    pos('refL',   'left',(cx - canopyW/2) + 'px');
+    pos('refR',   'left',(cx + canopyW/2) + 'px');
+
+    /* Scene QR 위치 (줄기 오른쪽 밑) */
+    const qrEl = document.getElementById('sceneQR');
+    qrEl.style.left   = (cx + trunkW/2 + 6) + 'px';
+    qrEl.style.top    = (groundY - 76) + 'px';
+}
+
+function drawCanopy(svg, style, cx, topY, cw, ch, color) {
+    const dark = shade(color, -25);
+    const midY = topY + ch * 0.52;
+
+    if (style === 'conifer') {
+        [[0.38,0],[0.62,0.24],[0.90,0.48]].forEach(([wr, yo]) => {
+            const w = cw * wr, y = topY + ch * yo, h = ch * 0.52;
+            svg.appendChild(el('polygon', {
+                points:`${cx},${y} ${cx-w/2},${y+h} ${cx+w/2},${y+h}`, fill: color,
+            }));
+        });
+    } else if (style === 'round') {
+        svg.appendChild(el('ellipse', { cx, cy:midY, rx:cw/2, ry:ch/2, fill:color }));
+        svg.appendChild(el('ellipse', { cx:cx-cw*0.12, cy:midY+ch*0.1, rx:cw*0.28, ry:ch*0.28, fill:dark, opacity:0.45 }));
+    } else if (style === 'oval') {
+        svg.appendChild(el('ellipse', { cx, cy:midY, rx:cw/2, ry:ch/2, fill:color }));
+        svg.appendChild(el('ellipse', { cx, cy:midY-ch*0.1, rx:cw*0.3, ry:ch*0.25, fill:shade(color,15), opacity:0.4 }));
+    } else if (style === 'tall') {
+        svg.appendChild(el('polygon', {
+            points:`${cx},${topY} ${cx-cw/2},${topY+ch} ${cx+cw/2},${topY+ch}`, fill:color,
+        }));
+        svg.appendChild(el('polygon', {
+            points:`${cx},${topY+ch*0.08} ${cx-cw*0.38},${topY+ch*0.5} ${cx+cw*0.38},${topY+ch*0.5}`,
+            fill:dark, opacity:0.4,
+        }));
+    } else if (style === 'spread') {
+        svg.appendChild(el('ellipse', { cx, cy:topY+ch*0.52, rx:cw/2, ry:ch*0.5, fill:color }));
+        svg.appendChild(el('ellipse', { cx:cx-cw*0.28, cy:topY+ch*0.68, rx:cw*0.28, ry:ch*0.28, fill:dark }));
+        svg.appendChild(el('ellipse', { cx:cx+cw*0.28, cy:topY+ch*0.68, rx:cw*0.28, ry:ch*0.28, fill:dark }));
+    }
+}
+
+function cloud(svg, x, y, w, h) {
+    svg.appendChild(el('ellipse', { cx:x,     cy:y,   rx:w/2, ry:h/2, fill:'rgba(255,255,255,0.82)' }));
+    svg.appendChild(el('ellipse', { cx:x-w/3, cy:y+h*0.2, rx:w/3, ry:h/1.8, fill:'rgba(255,255,255,0.75)' }));
+    svg.appendChild(el('ellipse', { cx:x+w/3, cy:y+h*0.15, rx:w/3.5, ry:h/2, fill:'rgba(255,255,255,0.75)' }));
+}
+
+function treeColor(style) {
+    return { conifer:'#2d7a2d', round:'#3a8a3a', oval:'#5a8a2a', tall:'#1a5c1a', spread:'#4a8a50' }[style] || '#3a7a3a';
+}
+
+function shade(hex, n) {
+    const v = parseInt(hex.slice(1),16);
+    const clamp = x => Math.min(255,Math.max(0,x));
+    const r=clamp((v>>16)+n), g=clamp(((v>>8)&0xff)+n), b=clamp((v&0xff)+n);
+    return '#'+[r,g,b].map(x=>x.toString(16).padStart(2,'0')).join('');
+}
+
+function el(tag, attrs={}) {
+    const e = document.createElementNS('http://www.w3.org/2000/svg', tag);
+    Object.entries(attrs).forEach(([k,v]) => e.setAttribute(k,v));
+    return e;
+}
+
+function pos(id, prop, val) {
+    document.getElementById(id).style[prop] = val;
+}
+
+function toggleAnswer() {
+    document.getElementById('ansBox').classList.toggle('show');
+}
+
+/* ── 초기화 ── */
+window.addEventListener('load', () => {
+    renderList();
+    select(0);
+});
+
+window.addEventListener('resize', () => select(currentIdx));
+</script>
+</body>
+</html>

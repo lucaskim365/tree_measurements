@@ -32,6 +32,39 @@
             font-size: 0.78rem;
             color: var(--text);
         }
+
+        .tree-info-card {
+            width: 100%;
+            max-width: 480px;
+            background: var(--bg-card);
+            border: 1px solid rgba(108, 140, 255, 0.3);
+            border-radius: var(--radius-md);
+            padding: 14px 20px;
+            margin-bottom: 16px;
+        }
+
+        .tree-info-card .tree-id {
+            font-size: 1rem;
+            font-weight: 700;
+            color: #6c8cff;
+            margin-bottom: 8px;
+        }
+
+        .tree-info-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 6px 16px;
+            font-size: 0.8rem;
+        }
+
+        .tree-info-grid .label {
+            color: var(--text-muted);
+        }
+
+        .tree-info-grid .value {
+            color: var(--text);
+            font-weight: 500;
+        }
     </style>
 </head>
 
@@ -42,6 +75,12 @@
             <a href="measure.html" class="btn-back">← 새 측정</a>
             <h1 class="result-title">📊 측정 결과</h1>
             <a href="index.html" class="btn-back">홈 🏠</a>
+        </div>
+
+        <!-- Tree Info (QR 데이터) -->
+        <div class="tree-info-card" id="treeInfoCard" style="display:none;">
+            <div class="tree-id" id="treeInfoId">—</div>
+            <div class="tree-info-grid" id="treeInfoGrid"></div>
         </div>
 
         <!-- Captured image -->
@@ -91,6 +130,25 @@
     <script>
         document.addEventListener('DOMContentLoaded', () => {
             const data = JSON.parse(sessionStorage.getItem('measurementResult') || '{}');
+
+            // QR 나무 정보 표시
+            if (data.treeData && data.treeData.id) {
+                const td = data.treeData;
+                document.getElementById('treeInfoCard').style.display = 'block';
+                document.getElementById('treeInfoId').textContent = `🌳 ${td.id}`;
+
+                const fields = [
+                    ['수종', td.species],
+                    ['식재일', td.planted],
+                    ['위치', td.location],
+                    ['관리자', td.manager],
+                ];
+                const grid = document.getElementById('treeInfoGrid');
+                fields.forEach(([label, value]) => {
+                    if (!value) return;
+                    grid.innerHTML += `<span class="label">${label}</span><span class="value">${value}</span>`;
+                });
+            }
 
             // 측정값 표시
             if (data.height != null) {
@@ -142,6 +200,10 @@
             // 공유 버튼
             document.getElementById('shareBtn').addEventListener('click', async () => {
                 let shareText = `🌳 나무 측정 결과\n`;
+                if (data.treeData && data.treeData.id) {
+                    shareText += `나무 ID: ${data.treeData.id}\n`;
+                    if (data.treeData.species) shareText += `수종: ${data.treeData.species}\n`;
+                }
                 shareText += `높이: ${data.height?.toFixed(2) || '—'}m\n`;
                 shareText += `폭: ${data.width?.toFixed(2) || '—'}m\n`;
                 shareText += `거리: ${data.distance?.toFixed(2) || '—'}m`;

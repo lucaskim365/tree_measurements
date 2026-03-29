@@ -1,231 +1,214 @@
 /**
- * detector.js — Phase 2: AR.js + js-aruco 하이브리드 마커 검출
+ * detector.js — Phase 3: jsQR 기반 QR 코드 감지
  *
- * AR.js (A-Frame 통합): Hiro/Custom .patt 패턴 마커 검출
- * js-aruco: ArUco 바이너리 마커 검출 (폴백)
+ * jsQR 라이브러리로 카메라 프레임에서 QR 코드를 감지한다.
+ * - QR 코드 4개 코너 좌표로 카메라-마커 거리 추정
+ * - QR 데이터(JSON) 파싱 → 나무 ID, 수종, 관리정보 추출
+ * - 감지 캔버스 640×480 고정 (성능 최적화)
  *
- * 두 라이브러리를 공통 인터페이스로 통합하여 앱에 제공한다.
+ * QR 데이터 형식 (JSON):
+ *   { "id": "TREE-001", "species": "소나무", "planted": "2010-03",
+ *     "location": "A구역", "manager": "산림청", "size": 20 }
+ *   size: 마커 실물 크기 (cm), 생략 시 기본 20cm 사용
+ *   JSON이 아닌 경우 raw 문자열을 id로 처리
+ *
+ * 거리 추정 공식: d = f × S / p
+ *   f: 초점거리 (px, 감지 캔버스 기준 추정값)
+ *   S: 마커 실물 크기 (m)
+ *   p: QR 상단 변의 픽셀 길이
  */
 
 const Detector = (() => {
-    let markerSize = 0.20; // 20cm
+    const DETECT_WIDTH = 640;
+    const DETECT_HEIGHT = 480;
+    // 640px 너비, 수평 FOV ~60° 기준 추정 초점거리
+    const FOCAL_LENGTH = 554;
+
+    let markerSize = 0.20; // 기본 20cm
     let isInitialized = false;
 
-    // 검출된 마커 상태
     let activeMarker = null;
     let markerDistance = 0;
     let markerVisible = false;
+    let qrData = null;
 
-    // 콜백
     let callbacks = { onFound: null, onLost: null };
 
-    // A-Frame 마커 엔티티 참조
-    let hiroMarkerEl = null;
-    let customMarkerEl = null;
+    // 감지용 오프스크린 캔버스
+    let detectionCanvas = null;
+    let detectionCtx = null;
 
-    // js-aruco 검출기 (ArUco 폴백)
-    let arucoDetector = null;
-    let arucoCanvas = null;
-    let arucoCtx = null;
+    // 마커 소실 디바운스 타이머
+    let lostTimer = null;
 
     /**
-     * 초기화 — A-Frame 마커 이벤트 바인딩 + js-aruco 셋업
+     * 초기화
      */
     function init(options = {}) {
         markerSize = options.markerSize || 0.20;
         callbacks.onFound = options.onFound || null;
         callbacks.onLost = options.onLost || null;
 
-        // A-Frame 마커 이벤트 바인딩
-        setupAFrameMarkers();
-
-        // js-aruco 폴백 셋업
-        setupAruco();
+        detectionCanvas = document.createElement('canvas');
+        detectionCanvas.width = DETECT_WIDTH;
+        detectionCanvas.height = DETECT_HEIGHT;
+        detectionCtx = detectionCanvas.getContext('2d', { willReadFrequently: true });
 
         isInitialized = true;
-        console.log('[Detector] Phase 2 초기화 완료 (AR.js + js-aruco)');
+        console.log('[Detector] jsQR 초기화 완료 (640×480 감지 캔버스)');
     }
 
     /**
-     * A-Frame 마커 이벤트 셋업
+     * 비디오 프레임에서 QR 코드 감지
+     * app.js의 RAF 루프에서 매 프레임 호출
+     * @param {HTMLVideoElement} videoElement
+     * @returns {Object|null} 감지된 마커 정보
      */
-    function setupAFrameMarkers() {
-        hiroMarkerEl = document.getElementById('hiroMarker');
-        customMarkerEl = document.getElementById('customMarker');
+    function detectQR(videoElement) {
+        if (!isInitialized || !videoElement) return null;
+        if (videoElement.readyState < 2) return null;
+        if (typeof jsQR === 'undefined') {
+            console.warn('[Detector] jsQR 라이브러리가 로드되지 않았습니다.');
+            return null;
+        }
 
-        const markers = [hiroMarkerEl, customMarkerEl].filter(Boolean);
-
-        markers.forEach((markerEl, idx) => {
-            const markerType = idx === 0 ? 'hiro' : 'custom';
-
-            markerEl.addEventListener('markerFound', () => {
-                console.log(`[Detector] AR.js 마커 검출: ${markerType}`);
-                markerVisible = true;
-
-                // 마커의 3D 위치에서 거리 계산
-                const pos = new THREE.Vector3();
-                markerEl.object3D.getWorldPosition(pos);
-                markerDistance = pos.length(); // 카메라(원점)로부터 거리
-
-                activeMarker = {
-                    id: idx,
-                    type: markerType,
-                    source: 'arjs',
-                    distance: markerDistance,
-                    position: { x: pos.x, y: pos.y, z: pos.z },
-                    confidence: 0.95,
-                    markerEl: markerEl,
-                };
-
-                if (callbacks.onFound) callbacks.onFound(activeMarker);
+        try {
+            detectionCtx.drawImage(videoElement, 0, 0, DETECT_WIDTH, DETECT_HEIGHT);
+            const imageData = detectionCtx.getImageData(0, 0, DETECT_WIDTH, DETECT_HEIGHT);
+            const code = jsQR(imageData.data, imageData.width, imageData.height, {
+                inversionAttempts: 'dontInvert',
             });
 
-            markerEl.addEventListener('markerLost', () => {
-                console.log(`[Detector] AR.js 마커 소실: ${markerType}`);
-                markerVisible = false;
+            if (code) {
+                // 소실 타이머 취소
+                if (lostTimer) {
+                    clearTimeout(lostTimer);
+                    lostTimer = null;
+                }
 
-                // 약간의 딜레이 후 소실 처리 (순간적 소실 방지)
-                setTimeout(() => {
-                    if (!markerVisible) {
-                        activeMarker = null;
-                        if (callbacks.onLost) callbacks.onLost();
+                // QR 데이터 파싱
+                // 형식 A (파이프 ASCII): id|planted|size  ← 기본 형식
+                // 형식 B (JSON):        {"id":...}        ← 구버전 호환
+                let parsed = null;
+                try {
+                    if (code.data.startsWith('{')) {
+                        // JSON 형식 (구버전 호환)
+                        const raw = JSON.parse(code.data);
+                        parsed = { id: raw.id || raw.id };
+                        if (raw.species  || raw.sp)  parsed.species  = raw.species  || raw.sp;
+                        if (raw.planted  || raw.dt)  parsed.planted  = raw.planted  || raw.dt;
+                        if (raw.location || raw.loc) parsed.location = raw.location || raw.loc;
+                        if (raw.manager  || raw.mgr) parsed.manager  = raw.manager  || raw.mgr;
+                        if (raw.size     || raw.sz)  parsed.size     = raw.size     || raw.sz;
+                    } else {
+                        // 파이프 형식: id|planted|size
+                        const p = code.data.split('|');
+                        parsed = { id: p[0] };
+                        if (p[1]) parsed.planted = p[1];
+                        if (p[2]) parsed.size    = parseInt(p[2]) || 20;
                     }
-                }, 500);
-            });
-        });
-    }
+                    // 마커 크기 업데이트 (cm → m)
+                    if (parsed.size && typeof parsed.size === 'number') {
+                        markerSize = parsed.size / 100;
+                    }
+                } catch (_) {
+                    parsed = { id: code.data };
+                }
+                qrData = parsed;
 
-    /**
-     * js-aruco 폴백 셋업
-     * ArUco 마커 검출을 위한 캔버스 + 검출기 초기화
-     */
-    function setupAruco() {
-        try {
-            // js-aruco2가 로드되었는지 확인
-            if (typeof AR !== 'undefined' && AR.Detector) {
-                arucoDetector = new AR.Detector();
-                arucoCanvas = document.createElement('canvas');
-                arucoCanvas.width = 320;
-                arucoCanvas.height = 240;
-                arucoCtx = arucoCanvas.getContext('2d', { willReadFrequently: true });
-                console.log('[Detector] js-aruco 폴백 준비 완료');
-            } else {
-                console.log('[Detector] js-aruco 미로드 — AR.js 단독 모드');
-            }
-        } catch (e) {
-            console.warn('[Detector] js-aruco 초기화 실패:', e);
-        }
-    }
+                // 거리 추정: QR 상단 변의 픽셀 길이 사용
+                const loc = code.location;
+                const dx = loc.topRightCorner.x - loc.topLeftCorner.x;
+                const dy = loc.topRightCorner.y - loc.topLeftCorner.y;
+                const pixelSizeDetect = Math.sqrt(dx * dx + dy * dy);
 
-    /**
-     * js-aruco로 비디오 프레임 검출 (폴백용)
-     * AR.js가 마커를 못 찾을 때 ArUco 마커 검출 시도
-     */
-    function detectAruco(videoElement) {
-        if (!arucoDetector || !videoElement || markerVisible) return null;
+                // 감지 캔버스 → 실제 비디오 해상도 스케일 보정
+                const realWidth = videoElement.videoWidth || DETECT_WIDTH;
+                const scaleX = realWidth / DETECT_WIDTH;
+                const pixelSizeReal = pixelSizeDetect * scaleX;
 
-        try {
-            arucoCtx.drawImage(videoElement, 0, 0, 320, 240);
-            const imageData = arucoCtx.getImageData(0, 0, 320, 240);
-            const markers = arucoDetector.detect(imageData);
+                let dist = pixelSizeReal > 0
+                    ? (FOCAL_LENGTH * scaleX * markerSize) / pixelSizeReal
+                    : 2.0;
 
-            if (markers.length > 0) {
-                const m = markers[0];
-                const corners = m.corners;
+                // 물리적으로 불가능한 거리 클램핑 (0.3m ~ 30m)
+                dist = Math.max(0.3, Math.min(dist, 30));
+                markerDistance = dist;
 
-                // 코너로부터 픽셀 크기 추정
-                const dx = corners[1].x - corners[0].x;
-                const dy = corners[1].y - corners[0].y;
-                const pixelSize = Math.sqrt(dx * dx + dy * dy);
-
-                // 거리 추정
-                const focalLength = 280; // 320px 해상도 기준 추정 초점거리
-                const dist = (focalLength * markerSize) / pixelSize;
+                const wasVisible = markerVisible;
+                markerVisible = true;
 
                 activeMarker = {
-                    id: m.id,
-                    type: 'aruco',
-                    source: 'js-aruco',
-                    distance: dist,
-                    corners: corners,
-                    pixelSize: pixelSize,
-                    confidence: 0.85,
+                    id: parsed.id || 'QR',
+                    type: 'qr',
+                    source: 'jsqr',
+                    distance: markerDistance,
+                    corners: [
+                        loc.topLeftCorner,
+                        loc.topRightCorner,
+                        loc.bottomRightCorner,
+                        loc.bottomLeftCorner,
+                    ],
+                    pixelSize: pixelSizeReal,
+                    confidence: 0.9,
+                    qrData: parsed,
                 };
 
-                markerVisible = true;
-                if (callbacks.onFound) callbacks.onFound(activeMarker);
+                if (!wasVisible && callbacks.onFound) {
+                    callbacks.onFound(activeMarker);
+                }
+
                 return activeMarker;
+
+            } else {
+                // 이번 프레임에서 QR 미감지 → 디바운스 후 소실 처리
+                if (markerVisible && !lostTimer) {
+                    lostTimer = setTimeout(() => {
+                        markerVisible = false;
+                        activeMarker = null;
+                        qrData = null;
+                        lostTimer = null;
+                        if (callbacks.onLost) callbacks.onLost();
+                    }, 500);
+                }
             }
         } catch (e) {
-            // 조용히 실패
+            // 조용히 실패 (프레임 처리 오류)
         }
+
         return null;
     }
 
     /**
-     * 마커로부터 거리를 실시간 업데이트 (AR.js 기반)
-     * RAF 루프에서 호출
+     * app.js RAF 루프 호환용 (AR.js 방식의 updateDistance 대체)
+     * detectQR에서 이미 거리가 업데이트되므로 여기선 아무 작업 없음
      */
-    function updateDistance() {
-        if (!markerVisible || !activeMarker || !activeMarker.markerEl) return;
-
-        try {
-            const pos = new THREE.Vector3();
-            activeMarker.markerEl.object3D.getWorldPosition(pos);
-            markerDistance = pos.length();
-            activeMarker.distance = markerDistance;
-        } catch (e) {
-            // markerEl이 없는 경우 (ArUco 등)
-        }
-    }
+    function updateDistance() {}
 
     /**
-     * 거리 추정 (공식: d = f × S / p)
-     * AR.js 활성 시 3D 포즈 기반 거리 사용
+     * 픽셀 크기 기반 거리 추정 (외부 호출용 유틸)
      */
-    function estimateDistance(pixelSize, focalLength = 800) {
-        // AR.js가 활성이면 3D 포즈 거리를 우선 사용
-        if (markerVisible && activeMarker && activeMarker.source === 'arjs') {
-            return activeMarker.distance;
-        }
-        // 폴백: 픽셀 기반 거리 추정
+    function estimateDistance(pixelSize) {
+        if (markerVisible && activeMarker) return activeMarker.distance;
         if (pixelSize <= 0) return Infinity;
-        return (focalLength * markerSize) / pixelSize;
+        return (FOCAL_LENGTH * markerSize) / pixelSize;
     }
+
+    function getActiveMarker() { return activeMarker; }
+    function getLastDetection() { return activeMarker; }
+    function getDistance() { return markerDistance; }
+    function isVisible() { return markerVisible; }
+    function getMarkerSize() { return markerSize; }
 
     /**
-     * 현재 활성 마커 반환
+     * 마지막으로 파싱된 QR 데이터 반환
+     * @returns {{ id, species, planted, location, manager, size, ... } | null}
      */
-    function getActiveMarker() {
-        return activeMarker;
-    }
-
-    /**
-     * 현재 거리
-     */
-    function getDistance() {
-        return markerDistance;
-    }
-
-    /**
-     * 마커 가시성
-     */
-    function isVisible() {
-        return markerVisible;
-    }
-
-    function getMarkerSize() {
-        return markerSize;
-    }
-
-    // 하위 호환을 위한 별칭
-    function getLastDetection() {
-        return activeMarker;
-    }
+    function getQRData() { return qrData; }
 
     return {
         init,
-        detectAruco,
+        detectQR,
         updateDistance,
         estimateDistance,
         getActiveMarker,
@@ -233,5 +216,6 @@ const Detector = (() => {
         getDistance,
         isVisible,
         getMarkerSize,
+        getQRData,
     };
 })();

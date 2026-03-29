@@ -25,6 +25,8 @@ const Measure = (() => {
 
     // GPS 좌표 캐시
     let lastGPS = null;
+    // watchPosition ID (메모리 누수 방지용)
+    let watchId = null;
 
     /**
      * 초기화
@@ -65,7 +67,7 @@ const Measure = (() => {
         );
 
         // 지속적 추적 (위치 변경 시 업데이트)
-        navigator.geolocation.watchPosition(
+        watchId = navigator.geolocation.watchPosition(
             (pos) => {
                 lastGPS = {
                     lat: pos.coords.latitude,
@@ -183,6 +185,16 @@ const Measure = (() => {
     }
 
     /**
+     * GPS 추적 중단 (beforeunload 시 호출)
+     */
+    function stop() {
+        if (watchId !== null) {
+            navigator.geolocation.clearWatch(watchId);
+            watchId = null;
+        }
+    }
+
+    /**
      * 포인트 초기화
      */
     function reset() {
@@ -206,6 +218,7 @@ const Measure = (() => {
         calculate,
         calculateHeight,
         reset,
+        stop,
         getPoints,
         getGPS,
         updateDisplaySize,

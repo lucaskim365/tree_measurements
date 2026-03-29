@@ -1,0 +1,595 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>QR 마커 생성 — TreeMeasure</title>
+
+    <!-- QR 코드 생성 라이브러리 -->
+    <script src="js/qrcode.min.js"></script>
+
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            font-family: 'Segoe UI', system-ui, sans-serif;
+            background: #f5f5f5;
+            color: #222;
+            min-height: 100vh;
+        }
+
+        header {
+            background: #1a1a2e;
+            color: #fff;
+            padding: 16px 24px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        header h1 { font-size: 1.1rem; font-weight: 700; }
+        header p  { font-size: 0.8rem; color: rgba(255,255,255,0.55); margin-top: 2px; }
+
+        .container {
+            max-width: 1100px;
+            margin: 0 auto;
+            padding: 24px 16px;
+            display: grid;
+            grid-template-columns: 380px 1fr;
+            gap: 24px;
+            align-items: start;
+        }
+
+        /* ── 입력 폼 ── */
+        .form-panel {
+            background: #fff;
+            border-radius: 12px;
+            padding: 24px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+        }
+
+        .form-panel h2 {
+            font-size: 0.95rem;
+            font-weight: 700;
+            margin-bottom: 20px;
+            color: #333;
+            border-bottom: 2px solid #6c8cff;
+            padding-bottom: 8px;
+        }
+
+        .field {
+            margin-bottom: 14px;
+        }
+
+        label {
+            display: block;
+            font-size: 0.78rem;
+            font-weight: 600;
+            color: #555;
+            margin-bottom: 5px;
+        }
+
+        label .required { color: #e74c3c; margin-left: 2px; }
+        label .hint     { font-weight: 400; color: #999; font-size: 0.72rem; margin-left: 4px; }
+
+        input, select {
+            width: 100%;
+            padding: 9px 12px;
+            border: 1px solid #ddd;
+            border-radius: 7px;
+            font-size: 0.88rem;
+            font-family: inherit;
+            outline: none;
+            transition: border 0.2s;
+        }
+
+        input:focus, select:focus {
+            border-color: #6c8cff;
+            box-shadow: 0 0 0 3px rgba(108,140,255,0.12);
+        }
+
+        .field-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+        }
+
+        .btn-add {
+            width: 100%;
+            padding: 11px;
+            background: #6c8cff;
+            color: #fff;
+            border: none;
+            border-radius: 8px;
+            font-size: 0.9rem;
+            font-weight: 700;
+            cursor: pointer;
+            margin-top: 8px;
+            transition: background 0.2s;
+        }
+
+        .btn-add:hover { background: #5a7aee; }
+
+        .btn-clear-all {
+            width: 100%;
+            padding: 8px;
+            background: transparent;
+            color: #999;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            font-size: 0.8rem;
+            cursor: pointer;
+            margin-top: 8px;
+        }
+
+        .btn-clear-all:hover { color: #e74c3c; border-color: #e74c3c; }
+
+        /* JSON 미리보기 */
+        .json-preview {
+            background: #f8f9ff;
+            border: 1px solid #e0e4ff;
+            border-radius: 7px;
+            padding: 10px 12px;
+            font-family: 'Fira Code', 'Courier New', monospace;
+            font-size: 0.72rem;
+            color: #444;
+            white-space: pre;
+            overflow-x: auto;
+            margin-top: 14px;
+        }
+
+        /* ── QR 목록 패널 ── */
+        .list-panel {}
+
+        .list-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 16px;
+        }
+
+        .list-header h2 {
+            font-size: 0.95rem;
+            font-weight: 700;
+            color: #333;
+        }
+
+        .btn-print {
+            padding: 8px 18px;
+            background: #2ecc71;
+            color: #fff;
+            border: none;
+            border-radius: 8px;
+            font-size: 0.83rem;
+            font-weight: 700;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        .btn-print:hover { background: #27ae60; }
+        .btn-print:disabled { background: #ccc; cursor: default; }
+
+        .empty-state {
+            text-align: center;
+            padding: 60px 20px;
+            color: #aaa;
+            font-size: 0.88rem;
+            background: #fff;
+            border-radius: 12px;
+            border: 2px dashed #ddd;
+        }
+
+        .empty-state .icon { font-size: 2.5rem; margin-bottom: 12px; }
+
+        /* QR 카드 그리드 */
+        .qr-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            gap: 16px;
+        }
+
+        .qr-card {
+            background: #fff;
+            border-radius: 10px;
+            padding: 16px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.07);
+            text-align: center;
+            position: relative;
+        }
+
+        .qr-card .qr-inner canvas, .qr-card .qr-inner img {
+            width: 160px !important;
+            height: 160px !important;
+            display: block;
+            margin: 0 auto;
+        }
+
+        .qr-card .card-id {
+            font-size: 0.85rem;
+            font-weight: 700;
+            color: #333;
+            margin-bottom: 3px;
+        }
+
+        .qr-card .card-species {
+            font-size: 0.75rem;
+            color: #6c8cff;
+            font-weight: 600;
+            margin-bottom: 2px;
+        }
+
+        .qr-card .card-meta {
+            font-size: 0.7rem;
+            color: #999;
+            line-height: 1.5;
+        }
+
+        .qr-card .card-qr-note {
+            font-size: 0.6rem;
+            color: #bbb;
+            font-family: monospace;
+            margin-top: 5px;
+            background: #f5f5f5;
+            border-radius: 4px;
+            padding: 2px 6px;
+        }
+
+        .qr-card .card-size-badge {
+            position: absolute;
+            top: 8px;
+            right: 8px;
+            background: #f0f3ff;
+            color: #6c8cff;
+            font-size: 0.65rem;
+            font-weight: 700;
+            padding: 2px 7px;
+            border-radius: 10px;
+        }
+
+        .qr-card .btn-remove {
+            position: absolute;
+            top: 8px;
+            left: 8px;
+            background: none;
+            border: none;
+            color: #ccc;
+            font-size: 1rem;
+            cursor: pointer;
+            line-height: 1;
+            padding: 2px;
+        }
+
+        .qr-card .btn-remove:hover { color: #e74c3c; }
+
+        .qr-card .btn-download {
+            margin-top: 8px;
+            padding: 5px 12px;
+            background: #f0f3ff;
+            color: #6c8cff;
+            border: none;
+            border-radius: 6px;
+            font-size: 0.72rem;
+            font-weight: 600;
+            cursor: pointer;
+        }
+
+        .qr-card .btn-download:hover { background: #e0e6ff; }
+
+        /* 20cm 인쇄 가이드 */
+        .print-guide {
+            margin-top: 12px;
+            padding: 10px 14px;
+            background: #fffbea;
+            border: 1px solid #f0c040;
+            border-radius: 8px;
+            font-size: 0.78rem;
+            color: #7a5c00;
+        }
+
+        /* ── 인쇄 레이아웃 ── */
+        @media print {
+            header, .form-panel, .list-header .btn-print, .btn-remove,
+            .btn-download, .print-guide, .btn-clear-all { display: none !important; }
+
+            body { background: #fff; }
+
+            .container {
+                display: block;
+                padding: 0;
+                max-width: 100%;
+            }
+
+            .qr-grid {
+                display: grid;
+                grid-template-columns: repeat(3, 1fr);
+                gap: 12px;
+                page-break-inside: auto;
+            }
+
+            .qr-card {
+                border: 1px solid #ddd;
+                border-radius: 6px;
+                page-break-inside: avoid;
+                box-shadow: none;
+            }
+
+            /* 실물 20cm × 20cm 출력 기준 */
+            .qr-card canvas, .qr-card img {
+                width: 200px !important;
+                height: 200px !important;
+            }
+        }
+
+        @media (max-width: 768px) {
+            .container {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+
+<header>
+    <div>
+        <h1>🌳 TreeMeasure — QR 마커 생성기</h1>
+        <p>나무에 부착할 20×20cm QR 코드를 생성합니다</p>
+    </div>
+</header>
+
+<div class="container">
+
+    <!-- ── 입력 폼 ── -->
+    <div class="form-panel">
+        <h2>나무 정보 입력</h2>
+
+        <div class="field">
+            <label>나무 ID <span class="required">*</span></label>
+            <input type="text" id="fId" placeholder="예: TREE-2024-001" value="TREE-2024-001">
+        </div>
+
+        <div class="field">
+            <label>수종 <span class="hint">(수목 종류)</span></label>
+            <input type="text" id="fSpecies" list="speciesList" placeholder="예: 소나무">
+            <datalist id="speciesList">
+                <option value="소나무">
+                <option value="잣나무">
+                <option value="느티나무">
+                <option value="은행나무">
+                <option value="벚나무">
+                <option value="참나무">
+                <option value="단풍나무">
+                <option value="메타세쿼이아">
+                <option value="리기다소나무">
+                <option value="낙엽송">
+            </datalist>
+        </div>
+
+        <div class="field-row">
+            <div class="field">
+                <label>식재년월 <span class="hint">(YYYY-MM)</span></label>
+                <input type="month" id="fPlanted">
+            </div>
+            <div class="field">
+                <label>QR 크기 (cm)</label>
+                <select id="fSize">
+                    <option value="15">15cm</option>
+                    <option value="20" selected>20cm</option>
+                    <option value="25">25cm</option>
+                    <option value="30">30cm</option>
+                </select>
+            </div>
+        </div>
+
+        <div class="field">
+            <label>위치 / 구역</label>
+            <input type="text" id="fLocation" placeholder="예: A구역 3번, 남산공원 입구">
+        </div>
+
+        <div class="field">
+            <label>관리자</label>
+            <input type="text" id="fManager" placeholder="예: 산림청, 서울시 공원과">
+        </div>
+
+        <div class="field">
+            <label>메모</label>
+            <input type="text" id="fNote" placeholder="추가 정보 (선택)">
+        </div>
+
+        <div class="json-preview" id="jsonPreview">{}</div>
+
+        <button class="btn-add" onclick="addQR()">＋ QR 코드 추가</button>
+        <button class="btn-clear-all" onclick="clearAll()">전체 삭제</button>
+    </div>
+
+    <!-- ── QR 목록 ── -->
+    <div class="list-panel">
+        <div class="list-header">
+            <h2>생성된 QR 코드 <span id="countBadge" style="font-size:0.8rem;color:#999;font-weight:400;"></span></h2>
+            <button class="btn-print" id="printBtn" onclick="window.print()" disabled>🖨️ 인쇄</button>
+        </div>
+
+        <div id="emptyState" class="empty-state">
+            <div class="icon">🌳</div>
+            나무 정보를 입력하고<br><strong>"QR 코드 추가"</strong>를 눌러주세요
+        </div>
+
+        <div class="qr-grid" id="qrGrid"></div>
+
+        <div class="print-guide" id="printGuide" style="display:none;">
+            💡 <strong>인쇄 팁:</strong> 브라우저 인쇄 시 용지 크기를 A4로 설정하고 여백을 <strong>최소</strong>로 설정하세요.
+            QR 코드는 실물 20×20cm 기준으로 출력됩니다. 코팅 후 나무에 부착하세요.
+        </div>
+    </div>
+
+</div>
+
+<script>
+    let qrList = [];
+
+    // ── 입력값 변경 시 JSON 미리보기 업데이트 ──
+    document.querySelectorAll('input, select').forEach(el => {
+        el.addEventListener('input', updatePreview);
+    });
+
+    function buildData() {
+        const data = {};
+        const id       = document.getElementById('fId').value.trim();
+        const species  = document.getElementById('fSpecies').value.trim();
+        const planted  = document.getElementById('fPlanted').value;
+        const size     = parseInt(document.getElementById('fSize').value);
+        const location = document.getElementById('fLocation').value.trim();
+        const manager  = document.getElementById('fManager').value.trim();
+        const note     = document.getElementById('fNote').value.trim();
+
+        if (id)       data.id       = id;
+        if (species)  data.species  = species;
+        if (planted)  data.planted  = planted;
+        data.size = size;
+        if (location) data.location = location;
+        if (manager)  data.manager  = manager;
+        if (note)     data.note     = note;
+
+        return data;
+    }
+
+    function updatePreview() {
+        const data = buildData();
+        const pipe = compactJson(data);
+        document.getElementById('jsonPreview').textContent =
+            '// QR 인코딩 데이터 (파이프 형식)\n' + pipe +
+            '\n\n// 바이트 수: ~' + new Blob([pipe]).size + 'B';
+    }
+
+    // ── QR 인코딩: ASCII 전용 (id|planted|size)
+    // 한글(수종·위치·관리자)은 qrcodejs 인코딩 오류 유발 → 라벨 텍스트로만 출력
+    function compactJson(obj) {
+        return [obj.id || '', obj.planted || '', obj.size || 20].join('|');
+    }
+
+    updatePreview();
+
+    // ── QR 코드 추가 ──
+    function addQR() {
+        const idVal = document.getElementById('fId').value.trim();
+        if (!idVal) {
+            document.getElementById('fId').focus();
+            document.getElementById('fId').style.borderColor = '#e74c3c';
+            setTimeout(() => document.getElementById('fId').style.borderColor = '', 1500);
+            return;
+        }
+
+        const data = buildData();
+        const uid  = Date.now();
+        qrList.push({ uid, data });
+
+        renderCard(uid, data);
+        updateListUI();
+
+        // ID 자동 증가 (마지막 숫자 +1)
+        const nextId = idVal.replace(/(\d+)$/, (m) => String(parseInt(m) + 1).padStart(m.length, '0'));
+        document.getElementById('fId').value = nextId;
+        updatePreview();
+    }
+
+    // ── 카드 렌더링 ──
+    function renderCard(uid, data) {
+        document.getElementById('emptyState').style.display = 'none';
+
+        const card = document.createElement('div');
+        card.className = 'qr-card';
+        card.id = `card-${uid}`;
+
+        // QR 컨테이너 div (qrcodejs는 div에 렌더링)
+        const qrDiv = document.createElement('div');
+        qrDiv.className = 'qr-inner';
+        qrDiv.style.marginBottom = '10px';
+        card.appendChild(qrDiv);
+
+        // 나머지 정보
+        card.innerHTML += `
+            <button class="btn-remove" onclick="removeQR(${uid})" title="삭제">✕</button>
+            <div class="card-size-badge">${data.size}cm</div>
+            <div class="card-id">${data.id}</div>
+            ${data.species  ? `<div class="card-species">${data.species}</div>` : ''}
+            <div class="card-meta">
+                ${data.location ? '📍 ' + data.location + '<br>' : ''}
+                ${data.planted  ? '🌱 식재: '  + data.planted  + '<br>' : ''}
+                ${data.manager  ? '👤 ' + data.manager : ''}
+            </div>
+            <div class="card-qr-note">QR: ${data.id}|${data.planted||''}|${data.size}</div>
+            <button class="btn-download" onclick="downloadQR(${uid})">⬇ PNG 저장</button>
+        `;
+
+        // qrDiv는 innerHTML 후 사라지므로 다시 앞에 삽입
+        card.insertBefore(qrDiv, card.firstChild);
+
+        // QR 코드 생성 (qrcodejs API)
+        new QRCode(qrDiv, {
+            text: compactJson(data),
+            width: 160,
+            height: 160,
+            colorDark: '#000000',
+            colorLight: '#ffffff',
+            correctLevel: QRCode.CorrectLevel.L,
+        });
+
+        document.getElementById('qrGrid').appendChild(card);
+    }
+
+    // ── QR PNG 다운로드 ──
+    function downloadQR(uid) {
+        const data = qrList.find(q => q.uid === uid)?.data;
+        if (!data) return;
+        const card   = document.getElementById(`card-${uid}`);
+        // qrcodejs는 canvas 또는 img를 생성 — canvas 우선, 없으면 img 사용
+        const canvas = card.querySelector('canvas');
+        const img    = card.querySelector('.qr-inner img');
+        const link   = document.createElement('a');
+        link.download = `QR_${data.id || uid}.png`;
+        if (canvas) {
+            link.href = canvas.toDataURL('image/png');
+            link.click();
+        } else if (img) {
+            link.href = img.src;
+            link.click();
+        }
+    }
+
+    // ── 카드 삭제 ──
+    function removeQR(uid) {
+        qrList = qrList.filter(q => q.uid !== uid);
+        const card = document.getElementById(`card-${uid}`);
+        if (card) card.remove();
+        updateListUI();
+    }
+
+    // ── 전체 삭제 ──
+    function clearAll() {
+        if (qrList.length === 0) return;
+        if (!confirm('생성된 QR 코드를 모두 삭제할까요?')) return;
+        qrList = [];
+        document.getElementById('qrGrid').innerHTML = '';
+        updateListUI();
+    }
+
+    // ── UI 상태 업데이트 ──
+    function updateListUI() {
+        const count = qrList.length;
+        document.getElementById('countBadge').textContent = count > 0 ? `(${count}개)` : '';
+        document.getElementById('printBtn').disabled = count === 0;
+        document.getElementById('printGuide').style.display = count > 0 ? 'block' : 'none';
+        if (count === 0) {
+            document.getElementById('emptyState').style.display = 'block';
+        }
+    }
+
+    // ── 엔터로 추가 ──
+    document.querySelectorAll('input').forEach(el => {
+        el.addEventListener('keydown', e => {
+            if (e.key === 'Enter') addQR();
+        });
+    });
+</script>
+
+</body>
+</html>

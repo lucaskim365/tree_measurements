@@ -4,26 +4,24 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <meta name="description" content="AR 마커 기반 나무 높이·폭 측정">
+    <meta name="description" content="QR 마커 기반 나무 높이·폭 측정">
     <title>측정 중 — TreeMeasure</title>
 
-    <!-- A-Frame + AR.js CDN -->
-    <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
-    <script src="https://raw.githack.com/AR-js-org/AR.js/master/aframe/build/aframe-ar.js"></script>
+    <!-- jsQR: QR 코드 감지 라이브러리 -->
+    <script src="js/jsqr.min.js"></script>
 
     <link rel="stylesheet" href="css/style.css">
     <style>
-        /* A-Frame scene overrides */
-        .a-enter-vr,
-        .a-orientation-modal {
-            display: none !important;
-        }
-
-        a-scene {
+        /* 카메라 비디오 전체화면 */
+        #cameraVideo {
             position: fixed;
             top: 0;
             left: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
             z-index: 1;
+            background: #000;
         }
 
         /* Mode toggle */
@@ -80,6 +78,41 @@
         .distance-info strong {
             color: #4ade80;
         }
+
+        /* QR 나무 정보 패널 */
+        .tree-info-panel {
+            position: fixed;
+            top: 90px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 110;
+            background: rgba(0, 0, 0, 0.7);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            border: 1px solid rgba(108, 140, 255, 0.4);
+            border-radius: 10px;
+            padding: 8px 16px;
+            min-width: 180px;
+            max-width: 80vw;
+            display: none;
+        }
+
+        .tree-info-panel.visible {
+            display: block;
+        }
+
+        .tree-info-id {
+            font-size: 0.85rem;
+            font-weight: 700;
+            color: #6c8cff;
+            margin-bottom: 4px;
+        }
+
+        .tree-info-meta {
+            font-size: 0.75rem;
+            color: rgba(255, 255, 255, 0.65);
+            line-height: 1.5;
+        }
     </style>
 </head>
 
@@ -89,44 +122,20 @@
     <div class="overlay-screen" id="loadingScreen">
         <div class="spinner"></div>
         <div class="overlay-icon">📷</div>
-        <h2 class="overlay-title" id="loadingTitle">AR 엔진 로딩 중...</h2>
+        <h2 class="overlay-title" id="loadingTitle">카메라 초기화 중...</h2>
         <p class="overlay-text" id="loadingText">
-            A-Frame + AR.js를 초기화하고 있습니다.<br>
-            카메라 권한 팝업이 뜨면 <strong>"허용"</strong>을 눌러주세요.
+            카메라 권한 팝업이 뜨면 <strong>"허용"</strong>을 눌러주세요.<br>
+            20×20cm QR 코드를 나무에 부착 후 비추세요.
         </p>
         <button class="btn-primary" id="retryBtn" style="display:none;">
             <span class="icon">🔄</span> 다시 시도
         </button>
     </div>
 
-    <!-- A-Frame AR Scene -->
-    <a-scene id="arScene" embedded vr-mode-ui="enabled: false" renderer="logarithmicDepthBuffer: true; antialias: true"
-        arjs="sourceType: webcam; debugUIEnabled: false; detectionMode: mono_and_matrix; matrixCodeType: 3x3;"
-        style="display:none;">
-        <!-- Hiro 마커 (기본) -->
-        <a-marker id="hiroMarker" preset="hiro" size="0.20" smooth="true" smoothCount="5" smoothTolerance="0.01"
-            smoothThreshold="2" raycaster="objects: .clickable" emitevents="true">
-            <!-- 마커 인식 시 표시되는 3D 큐브 -->
-            <a-box position="0 0.02 0" scale="0.18 0.04 0.18"
-                material="color: #4ade80; opacity: 0.4; transparent: true"></a-box>
-            <!-- 수직 축 라인 (높이 참조) -->
-            <a-cylinder position="0 0.5 0" radius="0.003" height="1"
-                material="color: #4ade80; opacity: 0.6; transparent: true"></a-cylinder>
-        </a-marker>
+    <!-- Camera Video -->
+    <video id="cameraVideo" autoplay playsinline muted style="display:none;"></video>
 
-        <!-- Custom 마커 -->
-        <a-marker id="customMarker" type="pattern" url="markers/custom.patt" size="0.20" smooth="true" smoothCount="5"
-            emitevents="true">
-            <a-box position="0 0.02 0" scale="0.18 0.04 0.18"
-                material="color: #6c8cff; opacity: 0.4; transparent: true"></a-box>
-            <a-cylinder position="0 0.5 0" radius="0.003" height="1"
-                material="color: #6c8cff; opacity: 0.6; transparent: true"></a-cylinder>
-        </a-marker>
-
-        <a-entity camera></a-entity>
-    </a-scene>
-
-    <!-- Canvas Overlay (for measurement lines) -->
+    <!-- Canvas Overlay (measurement lines) -->
     <canvas id="overlayCanvas"
         style="position:fixed;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:10;"></canvas>
 
@@ -138,7 +147,7 @@
     <div class="ar-status-bar" style="z-index:100;">
         <div class="status-badge status-scanning" id="statusBadge">
             <div class="status-dot"></div>
-            <span id="statusText">마커 검색 중...</span>
+            <span id="statusText">QR 코드 검색 중...</span>
         </div>
         <a href="index.html" class="btn-round" title="홈으로">✕</a>
     </div>
@@ -146,6 +155,12 @@
     <!-- Distance info -->
     <div class="distance-info" id="distanceInfo">
         거리: <strong id="distanceValue">—</strong>m
+    </div>
+
+    <!-- QR 나무 정보 패널 -->
+    <div class="tree-info-panel" id="treeInfoPanel">
+        <div class="tree-info-id" id="treeInfoId">—</div>
+        <div class="tree-info-meta" id="treeInfoMeta"></div>
     </div>
 
     <!-- Measurement display -->
@@ -158,7 +173,7 @@
 
     <!-- Bottom controls -->
     <div class="ar-controls" style="z-index:100;">
-        <div class="ar-guide-text" id="guideText">마커를 카메라에 비추세요</div>
+        <div class="ar-guide-text" id="guideText">QR 코드를 카메라에 비추세요</div>
         <div class="ar-button-row">
             <button class="btn-round" id="torchBtn" title="플래시">🔦</button>
             <button class="btn-capture" id="captureBtn" title="포인트 찍기" disabled></button>

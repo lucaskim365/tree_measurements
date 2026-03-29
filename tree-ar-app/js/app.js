@@ -1,11 +1,11 @@
 /**
- * app.js — Phase 2: A-Frame + AR.js 통합 메인 컨트롤러
+ * app.js — Phase 3: jsQR 기반 메인 컨트롤러
  *
  * 아키텍처:
- *   A-Frame AR.js → 마커 검출 + 3D 포즈 추정
- *   Detector.js   → 이벤트 래핑 + js-aruco 폴백
- *   Measure.js    → 높이/폭 계산 + GPS
- *   Canvas        → 2D 오버레이 (측정 라인, 포인트)
+ *   Camera.js   → getUserMedia 카메라 스트림
+ *   Detector.js → jsQR QR 코드 감지 + 거리 추정
+ *   Measure.js  → 높이/폭 계산 + GPS
+ *   Canvas      → 2D 오버레이 (측정 라인, 포인트)
  */
 
 (function () {
@@ -24,47 +24,41 @@
     let currentState = State.LOADING;
     let canvas, ctx;
     let animFrameId = null;
+    let torchOn = false;
 
     const $ = (id) => document.getElementById(id);
 
     // ===== Boot =====
     document.addEventListener('DOMContentLoaded', () => {
-        const retryBtn = $('retryBtn');
+        $('retryBtn').addEventListener('click', () => window.location.reload());
 
-        retryBtn.addEventListener('click', () => {
-            window.location.reload();
-        });
+        const videoEl = $('cameraVideo');
 
-        // A-Frame 씬 로드 대기
-        const scene = $('arScene');
+        // 카메라 직접 초기화 (A-Frame 의존성 제거)
+        Camera.init(videoEl)
+            .then(() => onCameraReady(videoEl))
+            .catch((err) => {
+                if (err.name === 'NotAllowedError') {
+                    showError('카메라 권한이 거부되었습니다. 브라우저 설정에서 카메라를 허용해 주세요.');
+                } else {
+                    showError(`카메라 초기화 실패: ${err.message}`);
+                }
+            });
 
-        if (!scene) {
-            showError('A-Frame 씬을 찾을 수 없습니다.');
-            return;
-        }
-
-        // A-Frame이 준비되면 시작
-        if (scene.hasLoaded) {
-            onSceneReady();
-        } else {
-            scene.addEventListener('loaded', onSceneReady);
-        }
-
-        // 타임아웃 (20초 내 로드 실패 시)
+        // 20초 타임아웃
         setTimeout(() => {
             if (currentState === State.LOADING) {
-                showError('AR 엔진 로딩 시간 초과. 인터넷 연결을 확인하세요.');
+                showError('카메라 로딩 시간 초과. 권한 또는 연결을 확인하세요.');
             }
         }, 20000);
     });
 
-    // ===== Scene Ready =====
-    function onSceneReady() {
-        console.log('[App] A-Frame 씬 로드 완료');
+    // ===== Camera Ready =====
+    function onCameraReady(videoEl) {
+        console.log('[App] 카메라 초기화 완료');
 
-        // 로딩 오버레이 숨기기
         $('loadingScreen').classList.add('hidden');
-        $('arScene').style.display = '';
+        videoEl.style.display = '';
 
         // 오버레이 캔버스 셋업
         canvas = $('overlayCanvas');
@@ -72,53 +66,50 @@
         canvas.height = window.innerHeight;
         ctx = canvas.getContext('2d');
 
-        // Measure 초기화
+        // 실제 비디오 해상도로 Measure 초기화
+        const res = Camera.getResolution();
         Measure.init({
-            videoWidth: window.innerWidth,  // A-Frame은 전체 화면 사용
-            videoHeight: window.innerHeight,
+            videoWidth: res.width || window.innerWidth,
+            videoHeight: res.height || window.innerHeight,
             displayWidth: window.innerWidth,
             displayHeight: window.innerHeight,
         });
 
-        // Detector 초기화 (A-Frame 마커 이벤트 바인딩)
+        // Detector 초기화
         Detector.init({
             markerSize: 0.20,
             onFound: onMarkerFound,
             onLost: onMarkerLost,
         });
 
-        // 이벤트 바인딩
         bindEvents();
-
-        // 업데이트 루프 시작
-        startUpdateLoop();
+        startUpdateLoop(videoEl);
 
         setState(State.SCANNING);
-        showToast('📷 카메라 활성화 — 마커를 비추세요');
+        showToast('📷 카메라 활성화 — QR 코드를 비추세요');
     }
 
     // ===== Events =====
     function bindEvents() {
-        // 캡처 버튼 (중앙 포인트)
+        // 캡처 버튼 (화면 중앙 포인트)
         $('captureBtn').addEventListener('click', (e) => {
             e.stopPropagation();
             addTouchPoint(window.innerWidth / 2, window.innerHeight / 2);
         });
 
-        // 화면 터치로 포인트
+        // 화면 클릭으로 포인트 추가
         document.addEventListener('click', (e) => {
             if (e.target.closest('.ar-controls') ||
                 e.target.closest('.ar-status-bar') ||
                 e.target.closest('.mode-toggle') ||
-                e.target.closest('.overlay-screen') ||
-                e.target.closest('a-scene')) return;
+                e.target.closest('.overlay-screen')) return;
 
             if (currentState === State.READY || currentState === State.MEASURING) {
                 addTouchPoint(e.clientX, e.clientY);
             }
         });
 
-        // 화면 터치 (터치 이벤트 직접 처리)
+        // 터치 이벤트
         document.addEventListener('touchstart', (e) => {
             if (e.target.closest('.ar-controls') ||
                 e.target.closest('.ar-status-bar') ||
@@ -132,7 +123,7 @@
             }
         }, { passive: false });
 
-        // 모드 토글 (높이/폭)
+        // 측정 모드 토글 (높이/폭)
         const modeToggle = $('modeToggle');
         modeToggle.addEventListener('click', (e) => {
             const btn = e.target.closest('.mode-btn');
@@ -149,32 +140,23 @@
             showToast(newMode === 'height' ? '📏 높이 측정 모드' : '↔️ 수관폭 측정 모드');
         });
 
-        // 토치
+        // 손전등
         $('torchBtn').addEventListener('click', async () => {
             try {
-                // A-Frame의 비디오 트랙에 접근
-                const videoEl = document.querySelector('video');
-                if (videoEl && videoEl.srcObject) {
-                    const track = videoEl.srcObject.getVideoTracks()[0];
-                    if (track) {
-                        const caps = track.getCapabilities();
-                        if (caps.torch) {
-                            const settings = track.getSettings();
-                            const on = !settings.torch;
-                            await track.applyConstraints({ advanced: [{ torch: on }] });
-                            $('torchBtn').textContent = on ? '💡' : '🔦';
-                            showToast(on ? '💡 플래시 켜짐' : '🔦 플래시 꺼짐');
-                            return;
-                        }
-                    }
+                const result = await Camera.toggleTorch();
+                if (result === false && !torchOn) {
+                    showToast('이 기기는 플래시를 지원하지 않습니다');
+                } else {
+                    torchOn = result;
+                    $('torchBtn').textContent = torchOn ? '💡' : '🔦';
+                    showToast(torchOn ? '💡 플래시 켜짐' : '🔦 플래시 꺼짐');
                 }
-                showToast('이 기기는 플래시를 지원하지 않습니다');
             } catch (e) {
                 showToast('플래시를 사용할 수 없습니다');
             }
         });
 
-        // 리셋
+        // 초기화
         $('resetBtn').addEventListener('click', () => {
             resetMeasurement();
             showToast('↺ 초기화됨');
@@ -189,12 +171,12 @@
     }
 
     // ===== Update Loop =====
-    function startUpdateLoop() {
+    function startUpdateLoop(videoEl) {
         function tick() {
-            // 1. AR.js 거리 업데이트
-            Detector.updateDistance();
+            // QR 코드 감지 (매 프레임)
+            Detector.detectQR(videoEl);
 
-            // 2. 거리 표시 업데이트
+            // 거리 표시 업데이트
             if (Detector.isVisible()) {
                 const dist = Detector.getDistance();
                 if (dist > 0 && dist < 50) {
@@ -205,15 +187,7 @@
                 $('distanceInfo').classList.remove('visible');
             }
 
-            // 3. js-aruco 폴백 (AR.js가 못 잡을 때)
-            if (!Detector.isVisible()) {
-                const videoEl = document.querySelector('video');
-                if (videoEl) {
-                    Detector.detectAruco(videoEl);
-                }
-            }
-
-            // 4. 오버레이 그리기
+            // 오버레이 그리기
             drawOverlay();
 
             animFrameId = requestAnimationFrame(tick);
@@ -235,7 +209,6 @@
             const x = p.screenX;
             const y = p.screenY;
 
-            // 외곽 원
             ctx.beginPath();
             ctx.arc(x, y, 12, 0, Math.PI * 2);
             ctx.fillStyle = 'rgba(74, 222, 128, 0.2)';
@@ -244,13 +217,11 @@
             ctx.lineWidth = 2;
             ctx.stroke();
 
-            // 내부 점
             ctx.beginPath();
             ctx.arc(x, y, 4, 0, Math.PI * 2);
             ctx.fillStyle = '#4ade80';
             ctx.fill();
 
-            // 라벨
             ctx.fillStyle = '#fff';
             ctx.font = 'bold 13px Inter, Noto Sans KR, sans-serif';
             ctx.shadowColor = 'rgba(0,0,0,0.8)';
@@ -268,7 +239,6 @@
             const x1 = points[0].screenX, y1 = points[0].screenY;
             const x2 = points[1].screenX, y2 = points[1].screenY;
 
-            // 측정 라인
             ctx.setLineDash([8, 5]);
             ctx.strokeStyle = '#4ade80';
             ctx.lineWidth = 2;
@@ -281,7 +251,7 @@
             ctx.setLineDash([]);
             ctx.shadowBlur = 0;
 
-            // 치수 라벨 (라인 중간)
+            // 중간 치수 라벨
             const measurement = getCurrentMeasurement();
             if (measurement) {
                 const mx = (x1 + x2) / 2 + 16;
@@ -289,12 +259,10 @@
                 const val = measurement.primary;
                 const label = mode === 'height' ? `높이: ${val}m` : `폭: ${val}m`;
 
-                // 배경
                 ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
                 const textWidth = ctx.measureText(label).width;
                 ctx.fillRect(mx - 6, my - 16, textWidth + 12, 24);
 
-                // 텍스트
                 ctx.fillStyle = '#4ade80';
                 ctx.font = 'bold 14px Inter, Noto Sans KR, sans-serif';
                 ctx.fillText(label, mx, my);
@@ -304,35 +272,41 @@
 
     // ===== Marker Events =====
     function onMarkerFound(marker) {
-        const statusBadge = $('statusBadge');
-        statusBadge.className = 'status-badge status-ready';
-
-        const source = marker.source === 'arjs' ? 'AR.js' : 'ArUco';
-        const type = marker.type === 'hiro' ? 'Hiro' : marker.type === 'custom' ? 'Custom' : `#${marker.id}`;
-        $('statusText').textContent = `${type} 마커 (${source})`;
-
+        $('statusBadge').className = 'status-badge status-ready';
+        $('statusText').textContent = `QR 인식 (${marker.id})`;
         $('captureBtn').disabled = false;
 
+        // QR 나무 정보 패널 표시
+        const qd = marker.qrData;
+        const panel = $('treeInfoPanel');
+        $('treeInfoId').textContent = `🌳 ${qd.id || 'QR 마커'}`;
+
+        const metaParts = [];
+        if (qd.species) metaParts.push(`수종: ${qd.species}`);
+        if (qd.location) metaParts.push(`위치: ${qd.location}`);
+        if (qd.planted) metaParts.push(`식재: ${qd.planted}`);
+        $('treeInfoMeta').textContent = metaParts.join('  ·  ');
+        panel.classList.add('visible');
+
         const mode = Measure.getMode();
-        if (mode === 'height') {
-            $('guideText').textContent = '꼭대기 → 밑동 순서로 터치하세요';
-        } else {
-            $('guideText').textContent = '왼쪽 → 오른쪽 순서로 터치하세요';
-        }
+        $('guideText').textContent = mode === 'height'
+            ? '꼭대기 → 밑동 순서로 터치하세요'
+            : '왼쪽 → 오른쪽 순서로 터치하세요';
 
         if (currentState === State.SCANNING) {
             setState(State.READY);
-            showToast(`✅ ${type} 마커 인식! (${source})`);
+            showToast(`✅ QR 인식! ${qd.species ? qd.species + ' · ' : ''}ID: ${qd.id || '—'}`);
         }
     }
 
     function onMarkerLost() {
         $('statusBadge').className = 'status-badge status-scanning';
-        $('statusText').textContent = '마커 검색 중...';
+        $('statusText').textContent = 'QR 코드 검색 중...';
         $('distanceInfo').classList.remove('visible');
+        $('treeInfoPanel').classList.remove('visible');
 
         if (currentState === State.READY) {
-            $('guideText').textContent = '마커를 카메라에 비추세요';
+            $('guideText').textContent = 'QR 코드를 카메라에 비추세요';
         }
     }
 
@@ -340,7 +314,6 @@
     function addTouchPoint(screenX, screenY) {
         const { index } = Measure.addPoint(screenX, screenY);
 
-        // HTML 터치 포인트 마커
         const container = $('touchPointsContainer');
         const mode = Measure.getMode();
 
@@ -356,7 +329,6 @@
             }
         }
 
-        // 포인트 DOM
         const dot = document.createElement('div');
         dot.className = 'touch-point';
         dot.style.left = screenX + 'px';
@@ -364,7 +336,6 @@
         container.appendChild(dot);
 
         if (index === 1) {
-            // 측정 완료
             setState(State.DONE);
             const measurement = getCurrentMeasurement();
 
@@ -377,7 +348,6 @@
                 const label = mode === 'height' ? '높이' : '폭';
                 showToast(`📏 ${label}: ${measurement.primary.toFixed(2)}m`);
 
-                // 2.5초 후 결과 페이지로
                 setTimeout(() => goToResult(measurement), 2500);
             }
         }
@@ -385,17 +355,24 @@
 
     function getCurrentMeasurement() {
         let distance = Detector.getDistance();
+        let usedDefault = false;
 
-        // 거리가 비정상이면 기본값 사용
         if (!distance || distance <= 0 || distance > 50) {
             distance = 5;
+            usedDefault = true;
         }
 
-        // 초점거리 추정: A-Frame 카메라 FOV 기반
-        const fov = 45; // degrees (추정)
-        const focalLength = (window.innerHeight / 2) / Math.tan((fov / 2) * Math.PI / 180);
+        // FOV 기반 초점거리 추정
+        const fov = 60; // 일반 스마트폰 수평 FOV 추정값
+        const focalLength = (window.innerWidth / 2) / Math.tan((fov / 2) * Math.PI / 180);
 
-        return Measure.calculate(distance, focalLength);
+        const result = Measure.calculate(distance, focalLength);
+
+        if (result && usedDefault) {
+            showToast('⚠️ QR 거리 미확인 — 기본값 5m 사용');
+        }
+
+        return result;
     }
 
     // ===== Result =====
@@ -403,16 +380,20 @@
         // 현재 화면 캡처
         let imageData = null;
         try {
-            const arCanvas = document.querySelector('a-scene canvas');
-            if (arCanvas) {
-                imageData = arCanvas.toDataURL('image/jpeg', 0.85);
-            }
+            const captureCanvas = document.createElement('canvas');
+            captureCanvas.width = window.innerWidth;
+            captureCanvas.height = window.innerHeight;
+            const captureCtx = captureCanvas.getContext('2d');
+            captureCtx.drawImage($('cameraVideo'), 0, 0, captureCanvas.width, captureCanvas.height);
+            // 측정 오버레이도 합성
+            captureCtx.drawImage(canvas, 0, 0);
+            imageData = captureCanvas.toDataURL('image/jpeg', 0.85);
         } catch (e) {
             console.warn('[App] 화면 캡처 실패:', e);
         }
 
-        // GPS 포함
         const gps = Measure.getGPS();
+        const qrData = Detector.getQRData();
 
         sessionStorage.setItem('measurementResult', JSON.stringify({
             height: measurement.height,
@@ -421,11 +402,14 @@
             mode: measurement.mode,
             primary: measurement.primary,
             gps: gps,
+            treeData: qrData,
+            treeId: qrData ? qrData.id : null,
             imageData: imageData,
             timestamp: Date.now(),
         }));
 
         if (animFrameId) cancelAnimationFrame(animFrameId);
+        Measure.stop();
         window.location.href = 'result.html';
     }
 
@@ -448,7 +432,7 @@
                 : '왼쪽 → 오른쪽 순서로 터치하세요';
         } else {
             setState(State.SCANNING);
-            $('guideText').textContent = '마커를 카메라에 비추세요';
+            $('guideText').textContent = 'QR 코드를 카메라에 비추세요';
         }
     }
 
@@ -471,7 +455,13 @@
     }
 
     // ===== Cleanup =====
-    window.addEventListener('beforeunload', () => {
+    window.addEventListener('beforeunload', (e) => {
+        // 측정 중 이탈 시 브라우저 경고
+        if (currentState === State.MEASURING) {
+            e.preventDefault();
+            e.returnValue = '';
+        }
         if (animFrameId) cancelAnimationFrame(animFrameId);
+        Measure.stop(); // GPS watchPosition 해제
     });
 })();
