@@ -30,6 +30,10 @@
     let lockedQRData  = null;  // 나무 ID 등
     let lockedDistance = 0;    // 거리 (m)
 
+    // QR 가이드 스캔 라인 애니메이션
+    let scanLineY = 0;
+    let scanLineDir = 1;
+
     const $ = (id) => document.getElementById(id);
 
     // ===== Boot =====
@@ -207,9 +211,98 @@
         animFrameId = requestAnimationFrame(tick);
     }
 
+    // ===== QR Guide Frame =====
+    function drawQRGuide() {
+        const found = (currentState === State.READY);
+        const cw = canvas.width;
+        const ch = canvas.height;
+
+        // 가이드 박스: 화면 중앙, 짧은 변 기준 65%
+        const size = Math.min(cw, ch) * 0.65;
+        const gx = (cw - size) / 2;
+        const gy = (ch - size) / 2;
+        const arm = size * 0.15;   // 코너 선 길이
+        const r = 12;              // 코너 라운딩
+
+        // 배경 어둠: 가이드 박스 바깥 반투명 검정
+        ctx.save();
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.45)';
+        ctx.fillRect(0, 0, cw, ch);
+        // 가이드 박스 영역을 투명하게 클리어
+        ctx.clearRect(gx, gy, size, size);
+        ctx.restore();
+
+        // 코너 색상: 미인식=흰색, 인식=초록
+        const color = found ? '#4ade80' : '#ffffff';
+        const glow  = found ? 'rgba(74, 222, 128, 0.7)' : 'rgba(255,255,255,0.4)';
+
+        ctx.save();
+        ctx.strokeStyle = color;
+        ctx.lineWidth = found ? 4 : 3;
+        ctx.shadowColor = glow;
+        ctx.shadowBlur = 10;
+        ctx.lineCap = 'round';
+
+        // 4개 코너 ㄱ자 선 그리기
+        const corners = [
+            { x: gx,        y: gy,        dx: 1,  dy: 1  },  // 좌상
+            { x: gx + size, y: gy,        dx: -1, dy: 1  },  // 우상
+            { x: gx,        y: gy + size, dx: 1,  dy: -1 },  // 좌하
+            { x: gx + size, y: gy + size, dx: -1, dy: -1 },  // 우하
+        ];
+        corners.forEach(({ x, y, dx, dy }) => {
+            ctx.beginPath();
+            ctx.moveTo(x + dx * arm, y);
+            ctx.lineTo(x + dx * r, y);
+            ctx.arcTo(x, y, x, y + dy * r, r);
+            ctx.lineTo(x, y + dy * arm);
+            ctx.stroke();
+        });
+
+        ctx.shadowBlur = 0;
+
+        // 미인식 상태: 스캔 라인 애니메이션
+        if (!found) {
+            const speed = size * 0.008;
+            scanLineY += speed * scanLineDir;
+            if (scanLineY >= size) { scanLineY = size; scanLineDir = -1; }
+            if (scanLineY <= 0)    { scanLineY = 0;    scanLineDir =  1; }
+
+            const ly = gy + scanLineY;
+            const grad = ctx.createLinearGradient(gx, ly, gx + size, ly);
+            grad.addColorStop(0,    'rgba(255,255,255,0)');
+            grad.addColorStop(0.4,  'rgba(255,255,255,0.6)');
+            grad.addColorStop(0.5,  'rgba(255,255,255,0.9)');
+            grad.addColorStop(0.6,  'rgba(255,255,255,0.6)');
+            grad.addColorStop(1,    'rgba(255,255,255,0)');
+            ctx.strokeStyle = grad;
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(gx, ly);
+            ctx.lineTo(gx + size, ly);
+            ctx.stroke();
+        }
+
+        // 가이드 하단 안내 텍스트
+        ctx.fillStyle = found ? '#4ade80' : 'rgba(255,255,255,0.85)';
+        ctx.font = 'bold 14px Inter, Noto Sans KR, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.shadowColor = 'rgba(0,0,0,0.8)';
+        ctx.shadowBlur = 6;
+        const hint = found ? '✅ QR 인식 완료' : 'QR 코드를 가이드 안에 맞추세요';
+        ctx.fillText(hint, cw / 2, gy + size + 26);
+        ctx.textAlign = 'left';
+        ctx.restore();
+    }
+
     // ===== Overlay Drawing =====
     function drawOverlay() {
         ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        // SCANNING / READY 상태에서 QR 가이드 프레임 표시
+        if (currentState === State.SCANNING || currentState === State.READY) {
+            drawQRGuide();
+        }
 
         const points = Measure.getPoints();
         if (points.length === 0) return;
