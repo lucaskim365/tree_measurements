@@ -14,7 +14,9 @@
 
 const Measure = (() => {
     let points = [];
+    let tiltPoints = []; // 기울기 포인트 (pitch angles)
     let mode = 'height'; // 'height' | 'width'
+    let captureMode = 'touch'; // 'touch' | 'tilt'
 
     const DEFAULT_FOCAL_LENGTH = 800;
 
@@ -102,6 +104,23 @@ const Measure = (() => {
     }
 
     /**
+     * 측정 방식 변경
+     * @param {'touch'|'tilt'} newMode
+     */
+    function setCaptureMode(newMode) {
+        if (newMode === 'touch' || newMode === 'tilt') {
+            captureMode = newMode;
+            points = [];
+            tiltPoints = [];
+            console.log(`[Measure] 캡처 모드 변경: ${captureMode}`);
+        }
+    }
+
+    function getCaptureMode() {
+        return captureMode;
+    }
+
+    /**
      * 현재 모드
      */
     function getMode() {
@@ -127,6 +146,17 @@ const Measure = (() => {
         points.push(point);
 
         return { index: points.length - 1, point };
+    }
+
+    /**
+     * 기울기 포인트 추가 (각도)
+     */
+    function addTiltPoint(pitch) {
+        if (tiltPoints.length >= 2) {
+            tiltPoints = [];
+        }
+        tiltPoints.push(pitch);
+        return { index: tiltPoints.length - 1, pitch };
     }
 
     /**
@@ -174,6 +204,35 @@ const Measure = (() => {
     }
 
     /**
+     * 기울기 기반 높이 계산
+     * @param {number} distance - 카메라-나무 거리 (m)
+     * @returns {Object|null}
+     */
+    function calculateByTilt(distance) {
+        if (tiltPoints.length < 2) return null;
+
+        const a1 = tiltPoints[0]; // 첫 번째 기울기 (deg)
+        const a2 = tiltPoints[1]; // 두 번째 기울기 (deg)
+
+        // h = d * |tan(a1) - tan(a2)|
+        // DeviceOrientation beta는 수직일 때 90도, 눕혔을 때 0도 근처이므로 
+        // 90을 빼서 수평선을 0으로 기준으로 사용
+        const rad1 = (a1 - 90) * Math.PI / 180;
+        const rad2 = (a2 - 90) * Math.PI / 180;
+
+        const h = Math.abs(distance * (Math.tan(rad1) - Math.tan(rad2)));
+
+        return {
+            mode: 'height',
+            height: Math.round(h * 100) / 100,
+            primary: Math.round(h * 100) / 100,
+            distance: Math.round(distance * 100) / 100,
+            gps: lastGPS,
+            angles: [a1, a2],
+        };
+    }
+
+    /**
      * 하위호환: calculateHeight
      */
     function calculateHeight(distance, focalLength) {
@@ -199,10 +258,11 @@ const Measure = (() => {
      */
     function reset() {
         points = [];
+        tiltPoints = [];
     }
 
     function getPoints() {
-        return [...points];
+        return captureMode === 'touch' ? [...points] : [...tiltPoints];
     }
 
     function updateDisplaySize(w, h) {
@@ -214,9 +274,12 @@ const Measure = (() => {
         init,
         setMode,
         getMode,
+        setCaptureMode,
+        getCaptureMode,
         addPoint,
+        addTiltPoint,
         calculate,
-        calculateHeight,
+        calculateByTilt,
         reset,
         stop,
         getPoints,

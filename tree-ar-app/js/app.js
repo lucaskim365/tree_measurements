@@ -26,6 +26,10 @@
     let animFrameId = null;
     let torchOn = false;
 
+    // 기기 기울기 데이터
+    let currentPitch = 0;
+    let captureMode = 'touch'; // 'touch' | 'tilt'
+
     // QR 인식 시점에 잠금 — 카메라를 움직여도 유지됨
     let lockedQRData  = null;  // 나무 ID 등
     let lockedDistance = 0;    // 거리 (m)
@@ -111,7 +115,39 @@
         // 캡처 버튼 (화면 중앙 포인트)
         $('captureBtn').addEventListener('click', (e) => {
             e.stopPropagation();
-            addTouchPoint(window.innerWidth / 2, window.innerHeight / 2);
+            
+            // 시각적 피드백
+            $('captureBtn').classList.add('captured');
+            setTimeout(() => $('captureBtn').classList.remove('captured'), 300);
+
+            if (captureMode === 'touch') {
+                addTouchPoint(window.innerWidth / 2, window.innerHeight / 2);
+            } else {
+                addTiltPoint(currentPitch);
+            }
+        });
+
+        // 모드 토글 (Touch / Tilt)
+        $('modeTouch').addEventListener('click', () => {
+            if (captureMode === 'touch') return;
+            setCaptureMode('touch');
+        });
+        $('modeTilt').addEventListener('click', () => {
+            if (captureMode === 'tilt') return;
+            // iOS 등 보안 브라우저 권한 요청 트리거 가능
+            if (typeof DeviceOrientationEvent.requestPermission === 'function') {
+                DeviceOrientationEvent.requestPermission()
+                    .then(permissionState => {
+                        if (permissionState === 'granted') {
+                            setCaptureMode('tilt');
+                        } else {
+                            showToast('❌ 기울기 센서 권한이 거부되었습니다');
+                        }
+                    })
+                    .catch(console.error);
+            } else {
+                setCaptureMode('tilt');
+            }
         });
 
         // 화면 클릭으로 포인트 추가
@@ -201,6 +237,31 @@
             canvas.height = window.innerHeight;
             Measure.updateDisplaySize(window.innerWidth, window.innerHeight);
         });
+
+        // 기기 방향 센서
+        window.addEventListener('deviceorientation', (e) => {
+            // portrait 모드에서 휴대폰이 서 있는 정도 (pitch)
+            // 90(수직) ~ 0(수평)
+            if (e.beta !== null) {
+                currentPitch = e.beta;
+            }
+        }, true);
+    }
+
+    function setCaptureMode(mode) {
+        captureMode = mode;
+        Measure.setCaptureMode(mode);
+        resetMeasurement();
+
+        if (mode === 'touch') {
+            $('modeTouch').classList.add('active');
+            $('modeTilt').classList.remove('active');
+            showToast('👆 터치 방식 — 화면을 터치하여 높이를 재세요');
+        } else {
+            $('modeTouch').classList.remove('active');
+            $('modeTilt').classList.add('active');
+            showToast('📳 기울기 방식 — 폰을 움직여 중앙에 맞추고 캡처하세요');
+        }
     }
 
     // ===== Update Loop =====
@@ -328,11 +389,13 @@
         if (points.length === 0) return;
 
         const mode = Measure.getMode();
+        const capMode = Measure.getCaptureMode();
 
         // 포인트 그리기
         points.forEach((p, i) => {
-            const x = p.screenX;
-            const y = p.screenY;
+            // Touch 모드면 실제 좌표, Tilt 모드면 화면 중앙 사용
+            const x = (capMode === 'touch') ? p.screenX : window.innerWidth / 2;
+            const y = (capMode === 'touch') ? p.screenY : window.innerHeight / 2;
 
             ctx.beginPath();
             ctx.arc(x, y, 12, 0, Math.PI * 2);
@@ -351,36 +414,49 @@
             ctx.font = 'bold 13px Inter, Noto Sans KR, sans-serif';
             ctx.shadowColor = 'rgba(0,0,0,0.8)';
             ctx.shadowBlur = 4;
-            if (mode === 'height') {
-                ctx.fillText(i === 0 ? '꼭대기' : '밑동', x + 16, y + 4);
+            
+            let label = '';
+            if (capMode === 'touch') {
+                label = (mode === 'height') ? (i === 0 ? '꼭대기' : '밑동') : (i === 0 ? '왼쪽' : '오른쪽');
             } else {
-                ctx.fillText(i === 0 ? '왼쪽' : '오른쪽', x + 16, y + 4);
+                label = (i === 0 ? '각도 1' : '각도 2');
             }
+            ctx.fillText(label, x + 16, y + 4);
             ctx.shadowBlur = 0;
         });
 
         // 두 점 사이 라인 및 치수
         if (points.length === 2) {
-            const x1 = points[0].screenX, y1 = points[0].screenY;
-            const x2 = points[1].screenX, y2 = points[1].screenY;
+            let x1 = 0, y1 = 0, x2 = 0, y2 = 0;
+            
+            if (capMode === 'touch') {
+                x1 = points[0].screenX; y1 = points[0].screenY;
+                x2 = points[1].screenX; y2 = points[1].screenY;
+            } else {
+                x1 = window.innerWidth / 2; y1 = window.innerHeight / 2;
+                x2 = x1; y2 = y1;
+            }
 
-            ctx.setLineDash([8, 5]);
-            ctx.strokeStyle = '#4ade80';
-            ctx.lineWidth = 2;
-            ctx.shadowColor = 'rgba(74, 222, 128, 0.5)';
-            ctx.shadowBlur = 6;
-            ctx.beginPath();
-            ctx.moveTo(x1, y1);
-            ctx.lineTo(x2, y2);
-            ctx.stroke();
-            ctx.setLineDash([]);
-            ctx.shadowBlur = 0;
+            if (capMode === 'touch') {
+                ctx.setLineDash([8, 5]);
+                ctx.strokeStyle = '#4ade80';
+                ctx.lineWidth = 2;
+                ctx.shadowColor = 'rgba(74, 222, 128, 0.5)';
+                ctx.shadowBlur = 6;
+                ctx.beginPath();
+                ctx.moveTo(x1, y1);
+                ctx.lineTo(x2, y2);
+                ctx.stroke();
+                ctx.setLineDash([]);
+                ctx.shadowBlur = 0;
+            }
 
             // 중간 치수 라벨
             const measurement = getCurrentMeasurement();
             if (measurement) {
-                const mx = (x1 + x2) / 2 + 16;
-                const my = (y1 + y2) / 2;
+                // Tilt 모드는 라인이 없으므로 중앙에서 약간 위쪽에 표시
+                const mx = (capMode === 'touch') ? (x1 + x2) / 2 + 16 : window.innerWidth / 2 + 16;
+                const my = (capMode === 'touch') ? (y1 + y2) / 2 : window.innerHeight / 2 - 40;
                 const val = measurement.primary;
                 const label = mode === 'height' ? `높이: ${val}m` : `폭: ${val}m`;
 
@@ -415,10 +491,13 @@
         $('treeInfoMeta').textContent = metaParts.join('  ·  ');
         $('treeInfoPanel').classList.add('visible');
 
-        $('guideText').textContent = '꼭대기 → 밑동 순서로 터치하세요';
-
+        // SCANNING -> READY 전환 시에만 초기 가이드 표시
         if (currentState === State.SCANNING) {
             setState(State.READY);
+            const guide = (captureMode === 'touch') 
+                ? '꼭대기 → 밑동 순서로 터치하세요' 
+                : '꼭대기 조준 후 버튼을 누르세요';
+            $('guideText').textContent = guide;
             showToast(`✅ QR 인식! ID: ${qd.id || '—'}  거리: ${lockedDistance.toFixed(2)}m`);
         }
     }
@@ -435,7 +514,41 @@
         $('guideText').textContent = 'QR 코드를 카메라에 비추세요';
     }
 
-    // ===== Touch Point Handling =====
+    // ===== Position Handling =====
+    function addTiltPoint(pitch) {
+        const { index } = Measure.addTiltPoint(pitch);
+        const container = $('touchPointsContainer');
+
+        if (index === 0) {
+            container.innerHTML = '';
+            setState(State.MEASURING);
+            $('guideText').textContent = '밑동 조준 후 버튼을 누르세요';
+            showToast('📍 꼭대기 각도 캡처');
+        }
+
+        // 중앙에 점 하나 표시
+        if (container.innerHTML === '') {
+            const dot = document.createElement('div');
+            dot.className = 'touch-point';
+            dot.style.left = '50%';
+            dot.style.top = '50%';
+            container.appendChild(dot);
+        }
+
+        if (index === 1) {
+            setState(State.DONE);
+            const measurement = getCurrentMeasurement();
+            if (measurement) {
+                $('measureValue').textContent = measurement.primary.toFixed(2);
+                $('guideText').textContent = '측정 완료! 종료를 눌러 결과를 확인하세요';
+                $('measureLabel').textContent = '높이 (m)';
+                $('measurementDisplay').classList.add('active');
+                showToast(`📏 높이: ${measurement.primary.toFixed(2)}m`);
+                $('endBtn').style.display = '';
+            }
+        }
+    }
+
     function addTouchPoint(screenX, screenY) {
         const { index } = Measure.addPoint(screenX, screenY);
 
@@ -497,7 +610,10 @@
 
         const fov = 60;
         const focalLength = (window.innerWidth / 2) / Math.tan((fov / 2) * Math.PI / 180);
-        const result = Measure.calculate(distance, focalLength);
+        
+        const result = (captureMode === 'touch')
+            ? Measure.calculate(distance, focalLength)
+            : Measure.calculateByTilt(distance);
 
         if (result && usedDefault) {
             showToast('⚠️ QR 거리 미확인 — 기본값 5m 사용');
