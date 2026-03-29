@@ -56,6 +56,11 @@
     // ===== Camera Ready =====
     function onCameraReady(videoEl) {
         console.log('[App] 카메라 초기화 완료');
+        // file:// 프로토콜 경고 (canvas SecurityError 유발 가능)
+        if (location.protocol === 'file:') {
+            showToast('⚠️ 로컬 파일 실행 중 — 서버 실행을 권장합니다');
+            console.warn('[App] file:// 프로토콜: canvas.getImageData 차단 가능. localhost로 실행하세요.');
+        }
 
         $('loadingScreen').classList.add('hidden');
         videoEl.style.display = '';
@@ -172,9 +177,12 @@
 
     // ===== Update Loop =====
     function startUpdateLoop(videoEl) {
+        let frameCount = 0;
         function tick() {
-            // QR 코드 감지 (매 프레임)
-            Detector.detectQR(videoEl);
+            // QR 감지: 6프레임마다 1회 (약 10fps) — getImageData 비용 절감
+            if (++frameCount % 6 === 0) {
+                Detector.detectQR(videoEl);
+            }
 
             // 거리 표시 업데이트
             if (Detector.isVisible()) {

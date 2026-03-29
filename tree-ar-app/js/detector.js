@@ -67,6 +67,8 @@ const Detector = (() => {
     function detectQR(videoElement) {
         if (!isInitialized || !videoElement) return null;
         if (videoElement.readyState < 2) return null;
+        // 실제 프레임이 없으면 건너뜀
+        if (videoElement.videoWidth === 0 || videoElement.videoHeight === 0) return null;
         if (typeof jsQR === 'undefined') {
             console.warn('[Detector] jsQR 라이브러리가 로드되지 않았습니다.');
             return null;
@@ -75,8 +77,9 @@ const Detector = (() => {
         try {
             detectionCtx.drawImage(videoElement, 0, 0, DETECT_WIDTH, DETECT_HEIGHT);
             const imageData = detectionCtx.getImageData(0, 0, DETECT_WIDTH, DETECT_HEIGHT);
+            // attemptBoth: 정방향 + 반전 모두 시도 (화면 표시 QR 감지율 향상)
             const code = jsQR(imageData.data, imageData.width, imageData.height, {
-                inversionAttempts: 'dontInvert',
+                inversionAttempts: 'attemptBoth',
             });
 
             if (code) {
@@ -173,7 +176,8 @@ const Detector = (() => {
                 }
             }
         } catch (e) {
-            // 조용히 실패 (프레임 처리 오류)
+            // SecurityError: file:// 에서 canvas 접근 차단 등
+            console.warn('[Detector] detectQR 오류:', e.name, e.message);
         }
 
         return null;
