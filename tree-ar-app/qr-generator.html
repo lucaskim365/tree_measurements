@@ -288,6 +288,8 @@
 
         /* ── 인쇄 레이아웃 ── */
         @media print {
+            @page { margin: 5mm; }
+
             header, .form-panel, .list-header .btn-print, .btn-remove,
             .btn-download, .print-guide, .btn-clear-all { display: none !important; }
 
@@ -300,24 +302,42 @@
             }
 
             .qr-grid {
-                display: grid;
-                grid-template-columns: repeat(3, 1fr);
-                gap: 12px;
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                gap: 50px;
                 page-break-inside: auto;
             }
 
             .qr-card {
-                border: 1px solid #ddd;
-                border-radius: 6px;
+                border: none;
+                border-radius: 0;
+                padding: 0;
                 page-break-inside: avoid;
                 box-shadow: none;
+                width: 100%;
+                max-width: 100%;
+                text-align: center;
+                position: relative;
             }
 
-            /* 실물 20cm × 20cm 출력 기준 */
+            /* 실제 설정된 크기(cm)로 출력 */
             .qr-card canvas, .qr-card img {
-                width: 200px !important;
-                height: 200px !important;
+                width: var(--print-size, 20cm) !important;
+                height: var(--print-size, 20cm) !important;
+                margin: 0 auto;
             }
+
+            .qr-card .qr-inner {
+                margin-bottom: 20px !important;
+            }
+
+            /* 인쇄 시 텍스트 가독성 향상 */
+            .qr-card .card-id { font-size: 1.5rem; }
+            .qr-card .card-species { font-size: 1.2rem; margin-bottom: 5px; }
+            .qr-card .card-meta { font-size: 1.1rem; line-height: 1.6; }
+            .qr-card .card-qr-note { font-size: 1rem; margin-top: 10px; }
+            .qr-card .card-size-badge { display: none; }
         }
 
         @media (max-width: 768px) {
@@ -416,8 +436,8 @@
         <div class="qr-grid" id="qrGrid"></div>
 
         <div class="print-guide" id="printGuide" style="display:none;">
-            💡 <strong>인쇄 팁:</strong> 브라우저 인쇄 시 용지 크기를 A4로 설정하고 여백을 <strong>최소</strong>로 설정하세요.
-            QR 코드는 실물 20×20cm 기준으로 출력됩니다. 코팅 후 나무에 부착하세요.
+            💡 <strong>인쇄 팁:</strong> 브라우저 인쇄 설정에서 <strong>'배율을 100% 또는 기본값'</strong>으로, <strong>'여백을 최소'</strong>로 지정하세요.<br>
+            설정한 크기(예: 20cm) 그대로 실제 A4 용지에 출력됩니다. 코팅 후 나무에 부착하세요.
         </div>
     </div>
 
@@ -498,6 +518,7 @@
         const card = document.createElement('div');
         card.className = 'qr-card';
         card.id = `card-${uid}`;
+        card.style.setProperty('--print-size', `${data.size}cm`);
 
         // QR 컨테이너 div (qrcodejs는 div에 렌더링)
         const qrDiv = document.createElement('div');
@@ -524,13 +545,14 @@
         card.insertBefore(qrDiv, card.firstChild);
 
         // QR 코드 생성 (qrcodejs API)
+        // 인쇄 품질을 위해 캔버스 해상도는 800px로 크게 생성합니다.
         new QRCode(qrDiv, {
             text: compactJson(data),
-            width: 160,
-            height: 160,
+            width: 800,
+            height: 800,
             colorDark: '#000000',
             colorLight: '#ffffff',
-            correctLevel: QRCode.CorrectLevel.L,
+            correctLevel: QRCode.CorrectLevel.H, // 야외 환경 인식률 강화를 위해 오류 복원 레벨을 H(30%)로 상향
         });
 
         document.getElementById('qrGrid').appendChild(card);
@@ -546,8 +568,25 @@
         const img    = card.querySelector('.qr-inner img');
         const link   = document.createElement('a');
         link.download = `QR_${data.id || uid}.png`;
+        
         if (canvas) {
-            link.href = canvas.toDataURL('image/png');
+            // 다운로드 이미지로 프린트할 때 인식률이 떨어지는 것을 방지하기 위해 
+            // QR 표준 규격인 4 module 이상의 물리적 흰색 여백(Quiet Zone)을 이미지 밖으로 그려 넣습니다.
+            const margin = 100; // 800px 기준 충분한 여백 확보
+            const sizeWithMargin = canvas.width + (margin * 2);
+            
+            const paddedCanvas = document.createElement('canvas');
+            paddedCanvas.width = sizeWithMargin;
+            paddedCanvas.height = sizeWithMargin;
+            
+            const ctx = paddedCanvas.getContext('2d');
+            // 여백 영역을 흰색으로 완전히 채우기
+            ctx.fillStyle = '#ffffff';
+            ctx.fillRect(0, 0, sizeWithMargin, sizeWithMargin);
+            // 중앙에 원본 원본 QR 코드 안착
+            ctx.drawImage(canvas, margin, margin);
+            
+            link.href = paddedCanvas.toDataURL('image/png');
             link.click();
         } else if (img) {
             link.href = img.src;

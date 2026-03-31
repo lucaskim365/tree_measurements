@@ -23,6 +23,7 @@ const F_MIN_SAMPLES     = 8;     // 프레임 고정에 필요한 최소 샘플
 const F_OUTLIER_DELTA   = 80;    // 이상치 임계값 (px)
 const F_BUFFER_MAX      = 30;    // 버퍼 최대 크기
 const QR_SMALL_THRESH   = 80;    // px 이하이면 신뢰도 낮음
+const QR_LOST_DEBOUNCE  = 800;   // ms — 이 시간 이후에만 "소실" 배지 표시
 
 const PHASE_LABELS = ['꼭대기를 터치하세요 (1/3)', '밑동을 터치하세요 (2/3)', '수관 끝을 터치하세요 (3/3)'];
 const POINT_LABELS = ['①꼭대기', '②밑동', '③수관끝'];
@@ -152,8 +153,11 @@ function handleNoQR() {
     if (state !== 'framing') return;
     if (!qrLostSince) qrLostSince = Date.now();
 
+    const elapsed = Date.now() - qrLostSince;
+    if (elapsed < QR_LOST_DEBOUNCE) return;   // 짧은 깜빡임은 무시
+
     clearOverlay();
-    const sec = ((Date.now() - qrLostSince) / 1000).toFixed(0);
+    const sec = (elapsed / 1000).toFixed(0);
     updateStatusBadge('lost', `QR 소실 (${sec}s) — 마지막 값 유지`);
 }
 
